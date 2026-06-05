@@ -112,6 +112,15 @@ component QuorumCard inherits Rectangle {
                 spacing: 6px;
                 for r in AppState.approval-roster: RosterSlot { slot: r; }
             }
+            // a signature the real ApprovalQueue rejected (verify / RM-G.1 / SoD)
+            if AppState.sign-error != "": Rectangle {
+                border-radius: Theme.r-1; border-width: 1px; border-color: Theme.danger; background: Theme.danger.with-alpha(0.08);
+                HorizontalLayout {
+                    padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px; spacing: 7px;
+                    AppIcon { name: "alert"; size: 13px; tint: Theme.danger; y: (parent.height - self.height)/2; }
+                    Text { text: "queue rejected: " + AppState.sign-error; font-family: Theme.font-mono; font-size: 10px; color: Theme.danger; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
             // outcome
             if AppState.quorum-met: Btn { text: "Quorum met · core returned Approved · resume"; icon: "check"; kind: "primary"; clicked => { AppState.resume(); } }
             if !AppState.quorum-met: HorizontalLayout {

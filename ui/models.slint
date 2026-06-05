@@ -134,6 +134,7 @@ export global AppState {
     in property <[SigRow]> signatures;
     in property <int> quorum-need;
     in property <bool> quorum-met;
+    in property <string> sign-error;   // a signature the real queue rejected (STUDIO-6)
     in property <bool> has-pending;             // a high/critical gate is awaiting quorum
     in property <ClipData> pending-clip;        // the gated capsule
     in property <[ApprovalRow]> approval-roster; // computed slots (core owns SoD)

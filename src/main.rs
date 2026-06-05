@@ -145,6 +145,13 @@ struct RunState {
     ob_team: bool,
     // persisted setup config (built up during onboarding) — STUDIO-5
     cfg: config::Config,
+    // a gate signature the real queue rejected (display) — STUDIO-6
+    sign_error: String,
+    // the real async ApprovalQueue + the call_id currently open (core-live)
+    #[cfg(feature = "core-live")]
+    live: Option<core_bridge::approvals::LiveQueue>,
+    #[cfg(feature = "core-live")]
+    live_open: Option<String>,
 }
 
 impl RunState {
@@ -175,6 +182,11 @@ impl RunState {
         self.medium.clear();
         self.auto.clear();
         self.trip_fired = false;
+        self.sign_error.clear();
+        #[cfg(feature = "core-live")]
+        {
+            self.live_open = None;
+        }
     }
 
     /// Advance the run by one playback tick (assumes `status == "running"`).
@@ -372,6 +384,52 @@ fn gate_payload(c: &ClipData) -> Vec<u8> {
     if ph.is_empty() { format!("{}:{}", c.id, c.version).into_bytes() } else { ph.into_bytes() }
 }
 
+/// Route a dock signature through the REAL async ApprovalQueue (core-live).
+/// Opens the gate lazily, signs with the enrolled key, and records the
+/// signature only if the runtime's queue accepts it (verify + RM-G.1 roster
+/// auth + SoD + quorum). A rejection surfaces in `sign_error`.
+#[cfg(feature = "core-live")]
+fn live_sign(s: &mut RunState, clip: &ClipData, payload: &[u8], role: &str) {
+    let required = roles_of(clip);
+    let pairs: Vec<([u8; 32], String)> =
+        s.roster.signers.iter().map(|x| (x.pubkey, x.role.clone())).collect();
+    let signer = match s.roster.signer_for(role).cloned() {
+        Some(x) => x,
+        None => {
+            s.sign_error = format!("no enrolled signer for {role}");
+            return;
+        }
+    };
+    let secret = match signer.secret {
+        Some(sk) => sk,
+        None => {
+            s.sign_error = format!("{role}'s key is on a surface this build can't sign with");
+            return;
+        }
+    };
+    let proposer_pk = s.roster.signer_for("Operator").map(|x| x.pubkey).unwrap_or([0u8; 32]);
+    let cid = clip.id.to_string();
+
+    if s.live.is_none() {
+        s.live = Some(core_bridge::approvals::LiveQueue::new(&pairs));
+    }
+    if s.live_open.as_deref() != Some(cid.as_str()) {
+        if let Some(lq) = &s.live {
+            lq.open(&cid, &clip.name, payload.to_vec(), &clip.risk, &required, proposer_pk, "Operator");
+        }
+        s.live_open = Some(cid.clone());
+    }
+    let res = s.live.as_ref().map(|lq| lq.sign(&cid, secret, role));
+    match res {
+        Some(Ok(_met)) => {
+            s.signatures.push((role.to_string(), signer.name.clone(), "Slint".into()));
+            s.sign_error.clear();
+        }
+        Some(Err(e)) => s.sign_error = e,
+        None => {}
+    }
+}
+
 fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
     let pending = match &st.pending {
         Some(id) => match st.clip(id) {
@@ -496,6 +554,7 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
     );
     app.set_quorum_met(st.quorum_met());
     app.set_approval_roster(vm(approval_roster(st)));
+    app.set_sign_error(st.sign_error.clone().into());
     app.set_signers(vm(st.signers.clone())); // reflects the live enrolled roster
     app.set_roster_rows(vm(roster_rows(st)));
 
@@ -574,6 +633,11 @@ fn new_state_with(roster: signing::Roster) -> Rc<RefCell<RunState>> {
         ob_ready: false,
         ob_team: false,
         cfg: config::Config::default(), // production sets this from disk in new_state()
+        sign_error: String::new(),
+        #[cfg(feature = "core-live")]
+        live: None,
+        #[cfg(feature = "core-live")]
+        live_open: None,
     }))
 }
 
@@ -980,31 +1044,43 @@ fn main() -> Result<(), slint::PlatformError> {
             s.approved.push(id);
         }
         s.signatures.clear();
+        s.sign_error.clear();
+        #[cfg(feature = "core-live")]
+        {
+            s.live_open = None; // gate resolved; the next one opens fresh
+        }
         s.status = "running".into();
     });
     on!(on_sign, |st: &Rc<RefCell<RunState>>, role: &SharedString| {
         let mut s = st.borrow_mut();
         let role = role.to_string();
-        // The artifact being approved: the pending capsule's payload hash.
-        let payload = match &s.pending {
-            Some(id) => s.clip(id).map(|c| gate_payload(&c)).unwrap_or_default(),
+        // The pending capsule + the artifact being approved (its payload hash).
+        let clip = match &s.pending {
+            Some(id) => match s.clip(id) {
+                Some(c) => c,
+                None => return,
+            },
             None => return,
         };
-        // Produce a REAL ed25519 signature from the enrolled key; it is verified
-        // inside sign_for before it counts. Fail-closed: an unenrolled role or a
-        // not-yet-wired surface (PIV/FIDO2) does not record a signature.
+        let payload = gate_payload(&clip);
+
+        // core-live: route the signature through the REAL async ApprovalQueue —
+        // the runtime verifies the attestation, authorizes the signer (RM-G.1),
+        // enforces SoD, and decides quorum. Default: the local roster signs and
+        // STUDIO-3's policy seam decides (same Quorum::satisfied_by math).
+        #[cfg(feature = "core-live")]
+        live_sign(&mut s, &clip, &payload, &role);
+
+        #[cfg(not(feature = "core-live"))]
         match s.roster.sign_for(&role, &payload) {
             Ok((_sig, _surface)) => {
-                let name = s
-                    .roster
-                    .signer_for(&role)
-                    .map(|e| e.name.clone())
-                    .unwrap_or_default();
+                let name = s.roster.signer_for(&role).map(|e| e.name.clone()).unwrap_or_default();
                 // `Slint` is the SigningSurfaceTag (the native signing surface);
                 // the key-storage surface lives on the roster entry.
                 s.signatures.push((role, name, "Slint".into()));
+                s.sign_error.clear();
             }
-            Err(e) => eprintln!("sign rejected for {role}: {e}"),
+            Err(e) => s.sign_error = e.to_string(),
         }
     });
     on!(on_medium_approve, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
@@ -1692,6 +1768,27 @@ mod tests {
         assert!(!bad.ok, "tamper detected");
         assert_eq!(bad.break_seq, 6, "broken link at sequence 6");
         assert!(bad.message.contains("sequence 6"), "message: {}", bad.message);
+    }
+
+    #[cfg(feature = "core-live")]
+    #[test]
+    fn dock_routes_through_the_real_live_queue() {
+        // The dock's actual sign path (live_sign) drives the REAL async
+        // ApprovalQueue: studio's enrolled keys are verified + authorized + SoD
+        // + quorum-checked by the runtime, not just the policy seam.
+        let st = new_state_with(signing::Roster::seed_demo());
+        let mut s = st.borrow_mut();
+        s.pending = Some("c3".into());
+        let c3 = s.clip("c3").unwrap();
+        let payload = gate_payload(&c3);
+
+        live_sign(&mut s, &c3, &payload, "Reviewer");
+        assert_eq!(s.signatures.len(), 1, "the real queue accepted Reviewer");
+        assert!(s.sign_error.is_empty(), "no error: {}", s.sign_error);
+
+        live_sign(&mut s, &c3, &payload, "ComplianceOfficer");
+        assert_eq!(s.signatures.len(), 2);
+        assert!(s.quorum_met(), "High gate satisfied through the real ApprovalQueue");
     }
 
     #[test]
