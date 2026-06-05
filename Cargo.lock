@@ -1706,6 +1706,7 @@ dependencies = [
  "slint",
  "slint-build",
  "tiny_http",
+ "tokio",
  "ureq",
 ]
 

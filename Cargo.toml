@@ -48,9 +48,11 @@ ed25519-dalek = "2.1"
 # subsystem. When all subsystems are live, `core-live` becomes default and the
 # in-process model is deleted.
 citrate-agent-core = { path = "../citrate-agent-runtime/agent/core", optional = true }
+# STUDIO-6 — drive the real async ApprovalQueue (agent-core already pulls tokio).
+tokio = { version = "1", features = ["rt-multi-thread", "time"], optional = true }
 
 [features]
-core-live = ["dep:citrate-agent-core"]
+core-live = ["dep:citrate-agent-core", "dep:tokio"]
 
 [build-dependencies]
 slint-build = "1.16"

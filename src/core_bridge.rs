@@ -193,3 +193,136 @@ pub mod audit {
         }
     }
 }
+
+/// Live HITL approval through the REAL async `ApprovalQueue` (STUDIO-6).
+///
+/// The culmination of STUDIO-4: a studio `EnrolledSigner`'s ed25519 secret is
+/// fed to `Ed25519FileSurface::from_seed` to produce an `AttestedSignature` that
+/// the runtime's own `verify_attestation` + `StaticSignerRoster` (RM-G.1) +
+/// separation-of-duties + `Quorum::satisfied_by` accept — because both sides
+/// compute `signer_id = SHA-256(pubkey)` identically. `LiveQueue` wraps the
+/// async queue behind a synchronous, UI-thread-friendly surface.
+pub mod approvals {
+    use citrate_agent_core::capsule::manifest::RiskTier;
+    use citrate_agent_core::hitl::{
+        signer_id_from_pubkey, ApprovalQueue, Ed25519FileSurface, Quorum, Role, Signature,
+        Signer, SigningSurface, StaticSignerRoster, ToolCall,
+    };
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn tier_of(s: &str) -> RiskTier {
+        match s {
+            "low" => RiskTier::Low,
+            "medium" => RiskTier::Medium,
+            "critical" => RiskTier::Critical,
+            _ => RiskTier::High,
+        }
+    }
+
+    pub struct LiveQueue {
+        rt: tokio::runtime::Runtime,
+        queue: Arc<ApprovalQueue>,
+    }
+
+    impl LiveQueue {
+        /// Build the queue with a `StaticSignerRoster` from the enrolled
+        /// `(pubkey, role)` pairs — so studio's keys are authorized for real.
+        pub fn new(roster: &[([u8; 32], String)]) -> Self {
+            let mut sr = StaticSignerRoster::new();
+            for (pk, role) in roster {
+                if let Some(r) = super::role_from_str(role) {
+                    sr = sr.authorize(*pk, r);
+                }
+            }
+            let queue = Arc::new(ApprovalQueue::new().with_signer_roster(Arc::new(sr)));
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("tokio runtime");
+            Self { rt, queue }
+        }
+
+        /// Open a gate: submit the action to the real queue (async, spawned),
+        /// then block briefly until the payload is pinned (registered).
+        pub fn open(
+            &self,
+            call_id: &str,
+            name: &str,
+            payload: Vec<u8>,
+            tier: &str,
+            required: &[String],
+            proposer_pk: [u8; 32],
+            proposer_role: &str,
+        ) {
+            let req: Vec<Role> = required.iter().filter_map(|r| super::role_from_str(r)).collect();
+            let quorum = Quorum::for_tier(tier_of(tier), &req);
+            let proposer = Signer {
+                id: signer_id_from_pubkey(&proposer_pk),
+                role: super::role_from_str(proposer_role).unwrap_or(Role::Operator),
+            };
+            let call = ToolCall { call_id: call_id.into(), name: name.into(), args: serde_json::json!({}) };
+            let q = self.queue.clone();
+            self.rt.spawn(async move {
+                let _ = q.submit_for_action(call, payload, quorum, proposer).await;
+            });
+            // The entry is inserted on the future's first poll; wait for it.
+            for _ in 0..200 {
+                if self.queue.payload_for(call_id).is_some() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        /// Sign the pending action with an enrolled key. The REAL queue verifies
+        /// the attestation, authorizes the signer (RM-G.1), enforces SoD, and
+        /// decides quorum. Returns `Ok(quorum_met)` or the runtime's rejection.
+        pub fn sign(&self, call_id: &str, secret: [u8; 32], role: &str) -> Result<bool, String> {
+            let role = super::role_from_str(role).ok_or("unknown role")?;
+            let payload = self.queue.payload_for(call_id).ok_or("action not pending")?;
+            let surface = Ed25519FileSurface::from_seed(secret, role);
+            let sig: Signature = surface.sign(&payload).map_err(|e| e.to_string())?.into();
+            self.queue.add_signature(call_id, sig).map_err(|e| format!("{e:?}"))?;
+            // quorum met iff the entry resolved Approved and was removed
+            Ok(self.queue.payload_for(call_id).is_none())
+        }
+
+        pub fn signature_count(&self, call_id: &str) -> usize {
+            self.queue.signatures_on(call_id).len()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn high_gate_satisfied_by_real_enrolled_signatures() {
+        // End-to-end: studio's STUDIO-4 keys → real AttestedSignatures → the
+        // real async ApprovalQueue's verify + RM-G.1 roster auth + SoD + quorum.
+        let roster = crate::signing::Roster::seed_demo();
+        let pairs: Vec<([u8; 32], String)> =
+            roster.signers.iter().map(|s| (s.pubkey, s.role.clone())).collect();
+        let lq = super::approvals::LiveQueue::new(&pairs);
+
+        let op = roster.signer_for("Operator").unwrap();
+        lq.open(
+            "c3",
+            "recon.match-phi",
+            b"sha256:7b41...e0c9".to_vec(),
+            "high",
+            &["Reviewer".into(), "ComplianceOfficer".into(), "SecurityOfficer".into()],
+            op.pubkey,
+            "Operator",
+        );
+
+        let rv = roster.signer_for("Reviewer").unwrap();
+        let co = roster.signer_for("ComplianceOfficer").unwrap();
+        // One signature: not enough.
+        assert!(!lq.sign("c3", rv.secret.unwrap(), "Reviewer").unwrap(), "1 of 2");
+        assert_eq!(lq.signature_count("c3"), 1);
+        // Two: quorum met through the REAL ApprovalQueue.
+        assert!(lq.sign("c3", co.secret.unwrap(), "ComplianceOfficer").unwrap(), "quorum met end-to-end");
+    }
+}
