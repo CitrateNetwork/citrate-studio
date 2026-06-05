@@ -193,6 +193,10 @@ export global AppState {
     callback set-oversight(string);
     callback set-search(string);
 
+    // ---- live chain status (STUDIO-6: real reads vs rpc.citrate.ai/40204) ----
+    in property <bool> chain-online: false;
+    in property <string> chain-summary: "rpc.citrate.ai · probing…";
+
     // ---- signer roster (STUDIO-4: real ed25519 enrollment) ----
     in property <[RosterRow]> roster-rows;
     callback enroll-signer(string, string);  // role, surface (FileBacked | Keyring)

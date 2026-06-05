@@ -305,7 +305,7 @@ component PolicySection inherits VerticalLayout {
     width: 560px;
     Row { k: "Policy bundle hash"; v: "sha256:e3b0…c442"; mono: true; }
     Row { k: "Anchoring strategy"; v: "NightlyMerkle"; }
-    Row { k: "Chain"; v: "40204 · on-prem"; mono: true; }
+    Row { k: "Chain (live)"; v: AppState.chain-summary; mono: true; danger: !AppState.chain-online; }
     Row { k: "Audit retention"; v: "90 days · mtime 6d"; }
     Row { k: "Break-glass window"; v: "72h affirmation"; }
     Row { k: "Tripwires"; v: "9 active · FedRAMP"; }

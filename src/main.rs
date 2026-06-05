@@ -17,6 +17,8 @@ mod auth;
 mod signing;
 #[allow(dead_code)]
 mod config;
+#[allow(dead_code)]
+mod chain;
 // STUDIO-3 — bridge to the real citrate-agent-core (only under `core-live`).
 #[cfg(feature = "core-live")]
 mod core_bridge;
@@ -813,6 +815,33 @@ fn trunc_wallet(w: &str) -> String {
     }
 }
 
+/// Push a chain-read status into the UI (STUDIO-6).
+fn set_chain_status(ui: &StudioWindow, st: chain::ChainStatus) {
+    let app = ui.global::<AppState>();
+    app.set_chain_online(st.online);
+    app.set_chain_summary(
+        if st.online {
+            format!("{} · #{} · live", st.chain_id, st.block)
+        } else {
+            "rpc.citrate.ai · unreachable".to_string()
+        }
+        .into(),
+    );
+}
+
+/// Probe `rpc.citrate.ai` off-thread and reflect the result (live path).
+fn refresh_chain_async(ui: &StudioWindow) {
+    let w = ui.as_weak();
+    std::thread::spawn(move || {
+        let st = chain::status();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = w.upgrade() {
+                set_chain_status(&ui, st);
+            }
+        });
+    });
+}
+
 /// Reflect the stored session (or a dev `CITRATE_STUDIO_SIGNEDIN` seed) into the UI.
 fn restore_session(ui: &StudioWindow) {
     let app = ui.global::<AppState>();
@@ -874,6 +903,7 @@ fn main() -> Result<(), slint::PlatformError> {
     refresh(&ui, &st.borrow());
     set_audit_verdict(&ui, false);
     restore_session(&ui);
+    refresh_chain_async(&ui); // STUDIO-6: live chain status from rpc.citrate.ai
     // first-launch routing (STUDIO-5): no completed setup → onboarding, else Studio.
     if !config::is_configured() || std::env::var("CITRATE_STUDIO_FRESH").is_ok() {
         ui.global::<AppState>().set_view("onboard".into());
@@ -1482,6 +1512,9 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
     }
     refresh(&ui, &st.borrow());
     set_audit_verdict(&ui, std::env::var("CITRATE_STUDIO_TAMPER").is_ok());
+    if std::env::var("CITRATE_STUDIO_CHAIN").is_ok() {
+        set_chain_status(&ui, chain::status()); // opt-in live probe for shots
+    }
     if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
         let app = ui.global::<AppState>();
         app.set_signed_in(true);
