@@ -13,6 +13,8 @@ mod data;
 // client land in a later STUDIO-2 commit. `allow(dead_code)` until wired.
 #[allow(dead_code)]
 mod auth;
+#[allow(dead_code)]
+mod signing;
 // STUDIO-3 — bridge to the real citrate-agent-core (only under `core-live`).
 #[cfg(feature = "core-live")]
 mod core_bridge;
@@ -111,6 +113,7 @@ const UNITS_TOTAL: f32 = 56.0;
 struct RunState {
     base: Vec<ClipData>, // immutable clip facts for lookups
     signers: Vec<Signer>,
+    roster: signing::Roster, // real ed25519 signer roster (STUDIO-4)
     playhead: f32,
     status: String, // idle | running | paused | done
     pending: Option<String>,
@@ -293,6 +296,76 @@ agentile_sprint = \"{sprint}\"",
 }
 
 /// Compute the approval roster (SoD owned by the core).
+/// The five canonical roles, in dock order.
+const CANONICAL_ROLES: [&str; 5] =
+    ["Operator", "Reviewer", "ComplianceOfficer", "SecurityOfficer", "Auditor"];
+
+/// A friendly default name when enrolling a fresh signer for a role.
+fn default_signer_name(role: &str) -> String {
+    match role {
+        "Operator" => "Aleia Rouhani",
+        "Reviewer" => "Dorian Vale",
+        "ComplianceOfficer" => "Priya Anand",
+        "SecurityOfficer" => "Marcus Greel",
+        "Auditor" => "Ext. Auditor (read-only)",
+        _ => "New signer",
+    }
+    .to_string()
+}
+
+/// One Settings row per canonical role — enrolled (with real fp + surface) or not.
+fn roster_rows(st: &RunState) -> Vec<RosterRow> {
+    CANONICAL_ROLES
+        .iter()
+        .map(|role| match st.roster.signer_for(role) {
+            Some(e) => RosterRow {
+                role: (*role).into(),
+                name: e.name.clone().into(),
+                fp: format!("signer_id {}", e.fp()).into(),
+                surface: e.surface.clone().into(),
+                enrolled: true,
+                readonly: *role == "Auditor",
+            },
+            None => RosterRow {
+                role: (*role).into(),
+                name: "— not enrolled —".into(),
+                fp: "".into(),
+                surface: "".into(),
+                enrolled: false,
+                readonly: *role == "Auditor",
+            },
+        })
+        .collect()
+}
+
+/// Persist the roster to the platform config dir (best-effort).
+fn persist_roster(r: &signing::Roster) {
+    if let Some(p) = signing::roster_path() {
+        let _ = r.save_to(&p);
+    }
+}
+
+/// Build the Slint signer model from the real enrolled roster (fp = the real
+/// `signer_id`). Proposer/readonly derive from the role.
+fn signers_from_roster(r: &signing::Roster) -> Vec<Signer> {
+    r.signers
+        .iter()
+        .map(|s| Signer {
+            role: s.role.clone().into(),
+            name: s.name.clone().into(),
+            fp: s.fp().into(),
+            proposer: s.role == "Operator",
+            readonly: s.role == "Auditor",
+        })
+        .collect()
+}
+
+/// The artifact a gate signs: the pending capsule's payload hash.
+fn gate_payload(c: &ClipData) -> Vec<u8> {
+    let ph = c.payload_hash.to_string();
+    if ph.is_empty() { format!("{}:{}", c.id, c.version).into_bytes() } else { ph.into_bytes() }
+}
+
 fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
     let pending = match &st.pending {
         Some(id) => match st.clip(id) {
@@ -305,28 +378,32 @@ fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
     let signed: Vec<String> = st.signatures.iter().map(|s| s.0.clone()).collect();
     let met = st.quorum_met();
 
-    st.signers
+    // Iterate the gate's required roles (not the roster) so a role with NO
+    // enrolled signer shows up fail-closed instead of silently vanishing.
+    gate_roles
         .iter()
-        .filter(|s| gate_roles.contains(&s.role.to_string()))
-        .map(|s| {
-            let role = s.role.to_string();
-            let is_signed = signed.contains(&role);
+        .map(|role| {
+            let enrolled = st.roster.signer_for(role);
+            let is_signed = signed.contains(role);
             let surface = st
                 .signatures
                 .iter()
-                .find(|x| x.0 == role)
+                .find(|x| &x.0 == role)
                 .map(|x| x.2.clone())
                 .unwrap_or_default();
+            let proposer = role == "Operator";
+            let readonly = role == "Auditor";
             // SoD + approvability come from policy (the real core under
-            // `core-live`). A candidate is conflicted if any already-signed
-            // role conflicts with it (CO ⊥ SO).
-            let reason: Option<&str> = if s.proposer {
+            // `core-live`); enrollment is the fail-closed gate on top.
+            let reason: Option<&str> = if enrolled.is_none() {
+                Some("No signer enrolled (fail-closed)")
+            } else if proposer {
                 Some("Proposer can't self-approve")
-            } else if s.readonly || !policy::can_approve(&role) {
+            } else if readonly || !policy::can_approve(role) {
                 Some("Auditor never approves")
             } else if is_signed {
                 Some("Signed")
-            } else if signed.iter().any(|sr| policy::is_conflict(&role, sr)) {
+            } else if signed.iter().any(|sr| policy::is_conflict(role, sr)) {
                 Some("SoD · CO ⊥ SO")
             } else if met {
                 Some("Quorum met")
@@ -334,9 +411,9 @@ fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
                 None
             };
             ApprovalRow {
-                role: s.role.clone(),
-                name: s.name.clone(),
-                fp: s.fp.clone(),
+                role: role.clone().into(),
+                name: enrolled.map(|e| e.name.clone()).unwrap_or_else(|| "— not enrolled —".into()).into(),
+                fp: enrolled.map(|e| e.fp()).unwrap_or_default().into(),
                 signed: is_signed,
                 surface: surface.into(),
                 disabled: reason.is_some() && !is_signed,
@@ -413,6 +490,8 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
     );
     app.set_quorum_met(st.quorum_met());
     app.set_approval_roster(vm(approval_roster(st)));
+    app.set_signers(vm(st.signers.clone())); // reflects the live enrolled roster
+    app.set_roster_rows(vm(roster_rows(st)));
 
     // medium queue → clip data
     let mediums: Vec<ClipData> = st
@@ -453,9 +532,11 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
 }
 
 fn new_state() -> Rc<RefCell<RunState>> {
+    let roster = signing::load_or_seed();
     Rc::new(RefCell::new(RunState {
         base: data::clips(),
-        signers: data::signers(),
+        signers: signers_from_roster(&roster),
+        roster,
         playhead: 0.0,
         status: "idle".into(),
         pending: None,
@@ -687,7 +768,7 @@ fn seed_catalog(ui: &StudioWindow) {
     app.set_frames(vm(data::frames()));
     app.set_doctor(vm(data::doctor()));
     app.set_tripwires(vm(data::tripwires()));
-    app.set_signers(vm(data::signers()));
+    // signers are pushed from the real enrolled roster in refresh().
 }
 
 /// Apply a demo seed for screenshots / dev (mirrors shell.jsx SEED).
@@ -804,15 +885,56 @@ fn main() -> Result<(), slint::PlatformError> {
     on!(on_sign, |st: &Rc<RefCell<RunState>>, role: &SharedString| {
         let mut s = st.borrow_mut();
         let role = role.to_string();
-        if let Some(sig) = s.signers.iter().find(|x| x.role == role) {
-            let name = sig.name.to_string();
-            s.signatures.push((role, name, "Slint".into()));
+        // The artifact being approved: the pending capsule's payload hash.
+        let payload = match &s.pending {
+            Some(id) => s.clip(id).map(|c| gate_payload(&c)).unwrap_or_default(),
+            None => return,
+        };
+        // Produce a REAL ed25519 signature from the enrolled key; it is verified
+        // inside sign_for before it counts. Fail-closed: an unenrolled role or a
+        // not-yet-wired surface (PIV/FIDO2) does not record a signature.
+        match s.roster.sign_for(&role, &payload) {
+            Ok((_sig, _surface)) => {
+                let name = s
+                    .roster
+                    .signer_for(&role)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_default();
+                // `Slint` is the SigningSurfaceTag (the native signing surface);
+                // the key-storage surface lives on the roster entry.
+                s.signatures.push((role, name, "Slint".into()));
+            }
+            Err(e) => eprintln!("sign rejected for {role}: {e}"),
         }
     });
     on!(on_medium_approve, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
         let mut s = st.borrow_mut();
         let id = id.to_string();
         s.medium.retain(|x| x != &id);
+    });
+    // ---- signer roster (STUDIO-4): enroll generates a real ed25519 key ----
+    {
+        let st = st.clone();
+        let w = ui.as_weak();
+        let rf = refresh_weak.clone();
+        app.on_enroll_signer(move |role, surface| {
+            {
+                let mut s = st.borrow_mut();
+                let role = role.to_string();
+                let name = default_signer_name(&role);
+                s.roster.enroll(&role, &name, surface.as_str(), "");
+                s.signers = signers_from_roster(&s.roster);
+                persist_roster(&s.roster);
+            }
+            rf(&w);
+        });
+    }
+    on!(on_disenroll_signer, |st: &Rc<RefCell<RunState>>, role: &SharedString| {
+        let mut s = st.borrow_mut();
+        let role = role.to_string();
+        s.roster.disenroll(&role);
+        s.signers = signers_from_roster(&s.roster);
+        persist_roster(&s.roster);
     });
     on!(on_toggle_dry, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
         let mut s = st.borrow_mut();
@@ -1266,7 +1388,12 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
     if let Ok(ov) = std::env::var("CITRATE_STUDIO_OVERLAY") {
         let app = ui.global::<AppState>();
         match ov.as_str() {
-            "settings" => app.set_settings_open(true),
+            "settings" => {
+                app.set_settings_open(true);
+                if let Ok(sec) = std::env::var("CITRATE_STUDIO_SECTION") {
+                    app.set_settings_section(sec.into());
+                }
+            }
             "chat" => app.set_chat_open(true),
             "health" => app.set_health_open(true),
             "breakglass" => app.set_breakglass_open(true),
@@ -1475,6 +1602,33 @@ mod tests {
         assert_eq!(data::tools_code().len(), 6);
         assert_eq!(data::doctor().len(), 11);
         assert_eq!(data::tripwires().len(), 9);
-        assert_eq!(data::signers().len(), 5);
+        // signers now come from the real ed25519 roster (STUDIO-4)
+        assert_eq!(signing::Roster::seed_demo().signers.len(), 5);
+    }
+
+    #[test]
+    fn dock_signature_is_real_and_fail_closed() {
+        // A High gate (c3) with a seeded roster: signing produces a real,
+        // verifiable ed25519 signature; an unenrolled role cannot.
+        let st = new_state();
+        {
+            let mut s = st.borrow_mut();
+            s.roster = signing::Roster::seed_demo();
+            s.signers = signers_from_roster(&s.roster);
+            s.pending = Some("c3".into());
+        }
+        let s = st.borrow();
+        let c3 = s.clip("c3").unwrap();
+        let payload = gate_payload(&c3);
+        // Reviewer is enrolled → real signature that verifies under its pubkey.
+        let (sig, _surface) = s.roster.sign_for("Reviewer", &payload).unwrap();
+        let pk = s.roster.signer_for("Reviewer").unwrap().pubkey;
+        assert!(signing::verify(&pk, &payload, &sig));
+        // Fail-closed: drop Reviewer → the row is disabled "no signer enrolled".
+        drop(s);
+        st.borrow_mut().roster.disenroll("Reviewer");
+        let rows = approval_roster(&st.borrow());
+        let rv = rows.iter().find(|r| r.role == "Reviewer").unwrap();
+        assert!(rv.disabled && rv.reason.contains("No signer enrolled"));
     }
 }

@@ -9,7 +9,7 @@ import { ScrollView } from "std-widgets.slint";
 import { AppIcon } from "../icons.slint";
 import { RiskBadge, RoleGlyph, Btn, IconButton, Palettes } from "../primitives.slint";
 import { Eyebrow, SelectableText, Title } from "../typography.slint";
-import { AppState, Member, Signer } from "../models.slint";
+import { AppState, Member, Signer, RosterRow } from "../models.slint";
 
 component Avatar inherits Rectangle {
     in property <string> name;
@@ -193,23 +193,36 @@ component RosterSection inherits VerticalLayout {
         border-width: 1px; border-color: Theme.border-1; border-radius: Theme.r-2; clip: true;
         height: list.preferred-height;
         list := VerticalLayout {
-            for s in AppState.signers: Rectangle {
-                height: 52px;
+            for s in AppState.roster-rows: Rectangle {
+                height: 56px;
+                background: s.enrolled ? transparent : Theme.danger.with-alpha(0.04);
                 Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
                 HorizontalLayout {
                     padding-left: 15px; padding-right: 15px; spacing: 12px;
-                    RoleGlyph { role: s.role; y: (parent.height - self.height)/2; }
+                    RoleGlyph { role: s.role; opacity: s.enrolled ? 1.0 : 0.45; y: (parent.height - self.height)/2; }
                     VerticalLayout {
                         alignment: center; spacing: 1px; horizontal-stretch: 1;
-                        Text { text: s.role; font-size: 13px; font-weight: 500; color: Theme.ink; }
+                        Text { text: s.role; font-size: 13px; font-weight: 500; color: s.enrolled ? Theme.ink : Theme.fg-3; }
                         Text { text: s.name; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
                     }
-                    SelectableText { text: s.fp; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; }
-                    if s.readonly: Rectangle {
-                        border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.border-2; background: Theme.paper-2; y: (parent.height - self.height)/2;
+                    // real signer_id (when enrolled)
+                    if s.enrolled: SelectableText { text: s.fp; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; vertical-alignment: center; }
+                    // key-storage surface badge
+                    if s.enrolled: Rectangle {
+                        border-radius: Theme.r-pill; border-width: 1px;
+                        border-color: s.surface == "Keyring" ? Theme.citrate-green-dark : Theme.border-2;
+                        background: s.surface == "Keyring" ? Theme.citrate-green.with-alpha(0.12) : Theme.paper-2;
+                        y: (parent.height - self.height)/2;
                         HorizontalLayout { padding-left: 8px; padding-right: 8px; padding-top: 2px; padding-bottom: 2px;
-                            Text { text: "read-only"; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.fg-3; vertical-alignment: center; }
+                            Text { text: s.surface; font-family: Theme.font-mono; font-size: 9.5px; color: s.surface == "Keyring" ? Theme.citrate-green-dark : Theme.fg-3; vertical-alignment: center; }
                         }
+                    }
+                    // actions
+                    HorizontalLayout {
+                        spacing: 6px; y: (parent.height - self.height)/2;
+                        if s.enrolled: Btn { text: "Disenroll"; kind: "ghost"; sm: true; clicked => { AppState.disenroll-signer(s.role); } }
+                        if !s.enrolled: Btn { text: "Enroll · Keyring"; kind: "primary"; sm: true; clicked => { AppState.enroll-signer(s.role, "Keyring"); } }
+                        if !s.enrolled: Btn { text: "Dev key"; kind: "ghost"; sm: true; clicked => { AppState.enroll-signer(s.role, "FileBacked"); } }
                     }
                 }
             }

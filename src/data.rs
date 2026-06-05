@@ -3,7 +3,7 @@
 // PHI (HIGH quorum gate) → write report → anchor Merkle root.
 // TRIP-AU-002 (audit-shipper backlog) fires mid-run.
 use crate::{
-    CapsuleData, ClipData, DoctorCheck, FrameData, Member, OnboardStep, Signer, ToolData,
+    CapsuleData, ClipData, DoctorCheck, FrameData, Member, OnboardStep, ToolData,
     Tripwire,
 };
 use slint::{ModelRc, SharedString, VecModel};
@@ -189,18 +189,8 @@ pub fn tripwires() -> Vec<Tripwire> {
     ]
 }
 
-fn signer(role: &str, name: &str, fp: &str, proposer: bool, readonly: bool) -> Signer {
-    Signer { role: role.into(), name: name.into(), fp: fp.into(), proposer, readonly }
-}
-pub fn signers() -> Vec<Signer> {
-    vec![
-        signer("Operator", "Aleia Rouhani", "f1a2…90de", true, false),
-        signer("Reviewer", "Dorian Vale", "3c77…b412", false, false),
-        signer("ComplianceOfficer", "Priya Anand", "a90c…7e51", false, false),
-        signer("SecurityOfficer", "Marcus Greel", "5e2b…11af", false, false),
-        signer("Auditor", "Ext. Auditor (read-only)", "0bd4…cc20", false, true),
-    ]
-}
+// Signers now come from the real enrolled ed25519 roster (STUDIO-4):
+// see `signing::Roster` + `signers_from_roster` in main.rs.
 
 // ---- RBAC directory + initial team (settings.jsx DIRECTORY) ----
 fn member(id: &str, name: &str, title: &str, role: &str, team_role: &str) -> Member {

@@ -1697,6 +1697,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "citrate-agent-core",
+ "ed25519-dalek",
  "getrandom 0.2.17",
  "keyring",
  "png 0.17.16",

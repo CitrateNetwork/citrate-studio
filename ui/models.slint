@@ -70,6 +70,8 @@ export struct Tripwire { id: string, code: string, cond: string, sev: string, st
 // ---- roster + accumulated signatures ----
 export struct Signer { role: string, name: string, fp: string, proposer: bool, readonly: bool }
 export struct SigRow { role: string, name: string, surface: string }
+// STUDIO-4 — a roster row per canonical role (enrolled or not) for Settings.
+export struct RosterRow { role: string, name: string, fp: string, surface: string, enrolled: bool, readonly: bool }
 
 // A computed approval slot — the core (Rust) owns the SoD logic and
 // hands the UI a ready-to-render row (signed / disabled + reason).
@@ -190,6 +192,11 @@ export global AppState {
     callback set-workspace(string);
     callback set-oversight(string);
     callback set-search(string);
+
+    // ---- signer roster (STUDIO-4: real ed25519 enrollment) ----
+    in property <[RosterRow]> roster-rows;
+    callback enroll-signer(string, string);  // role, surface (FileBacked | Keyring)
+    callback disenroll-signer(string);        // role
 
     // ---- auth (STUDIO-2: OIDC + SIWE via citrate-identity) ----
     in property <bool> signed-in: false;
