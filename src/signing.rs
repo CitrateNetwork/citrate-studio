@@ -106,7 +106,10 @@ impl EnrolledSigner {
 
 const KEYRING_SERVICE: &str = "citrate-studio-signer";
 
-/// Load a Keyring-surface secret from the OS keyring.
+/// Load a Keyring-surface secret from the OS keyring. Used by `sign_for` (the
+/// default-build / test signing path); the `core-live` binary signs through the
+/// runtime's `Ed25519FileSurface` instead, so this is unused there.
+#[cfg_attr(feature = "core-live", allow(dead_code))]
 fn keyring_secret(signer_id: &str) -> Option<[u8; 32]> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, signer_id).ok()?;
     from_hex32(&entry.get_password().ok()?)
@@ -177,7 +180,11 @@ impl Roster {
     }
 
     /// Sign `payload` as `role` with the enrolled key; verifies before returning.
-    /// Returns the signature + the key-storage surface.
+    /// Returns the signature + the key-storage surface. This is the default-build
+    /// dock signing path; under `core-live` the dock signs through the runtime's
+    /// `ApprovalQueue` (`Ed25519FileSurface`), so the `core-live` binary doesn't
+    /// call this (tests still do).
+    #[cfg_attr(feature = "core-live", allow(dead_code))]
     pub fn sign_for(&self, role: &str, payload: &[u8]) -> Result<([u8; 64], String), SignError> {
         let s = self.signer_for(role).ok_or_else(|| SignError::NoSigner(role.into()))?;
         let secret = match s.surface.as_str() {

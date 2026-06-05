@@ -289,6 +289,9 @@ pub mod approvals {
             Ok(self.queue.payload_for(call_id).is_none())
         }
 
+        /// Accepted-signature count (mirrors the runtime's `signatures_on`).
+        /// Exercised by tests; allowed-dead only in non-test builds.
+        #[cfg_attr(not(test), allow(dead_code))]
         pub fn signature_count(&self, call_id: &str) -> usize {
             self.queue.signatures_on(call_id).len()
         }

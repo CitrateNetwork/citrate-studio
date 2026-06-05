@@ -142,11 +142,14 @@ export component HealthStrip inherits Rectangle {
                 padding-right: 16px;
                 spacing: 9px;
                 Rectangle {
+                    property <color> led: AppState.doctor-status == "DOCTOR · HEALTHY" ? Theme.citrate-green
+                        : AppState.doctor-status == "DOCTOR · BLOCKED" ? Theme.danger
+                        : Theme.citrate-yellow;
                     width: 8px;
                     height: 8px;
                     border-radius: 4px;
-                    background: Theme.citrate-yellow;
-                    drop-shadow-color: Theme.citrate-yellow.with-alpha(0.6);
+                    background: self.led;
+                    drop-shadow-color: self.led.with-alpha(0.6);
                     drop-shadow-blur: 8px;
                     y: (parent.height - 8px) / 2;
                 }
@@ -154,14 +157,14 @@ export component HealthStrip inherits Rectangle {
                     alignment: center;
                     spacing: 1px;
                     Text {
-                        text: "DOCTOR · ATTENTION";
+                        text: AppState.doctor-status;
                         font-family: Theme.font-mono;
                         font-size: 10px;
                         letter-spacing: 1.2px;
                         color: Theme.sealed-fg;
                     }
                     Text {
-                        text: "10 pass · 1 warn";
+                        text: AppState.doctor-summary;
                         font-family: Theme.font-mono;
                         font-size: 9px;
                         letter-spacing: 1px;
@@ -306,6 +309,16 @@ export component Chrome inherits Rectangle {
                                     : AppState.signed-in ? Theme.sealed-fg
                                     : auth-chip.signing ? Theme.sealed-fg-2 : Theme.ink;
                                 vertical-alignment: center;
+                            }
+                            // KYC-verified badge — a real claim from the ID token
+                            if AppState.signed-in && AppState.kyc-status == "verified": Rectangle {
+                                border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.citrate-green-dark;
+                                background: Theme.citrate-green.with-alpha(0.16); y: (parent.height - self.height)/2;
+                                HorizontalLayout {
+                                    padding-left: 5px; padding-right: 6px; padding-top: 1px; padding-bottom: 1px; spacing: 2px;
+                                    AppIcon { name: "check"; size: 9px; stroke-weight: 2.5; tint: Theme.citrate-green-dark; y: (parent.height - self.height)/2; }
+                                    Text { text: "KYC"; font-family: Theme.font-mono; font-size: 8.5px; letter-spacing: 0.5px; color: Theme.citrate-green-dark; vertical-alignment: center; }
+                                }
                             }
                         }
                         TouchArea {

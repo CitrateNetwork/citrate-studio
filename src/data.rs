@@ -153,9 +153,14 @@ pub fn frames() -> Vec<FrameData> {
     ]
 }
 
+// The modeled doctor catalog is the default-build Health Report; under
+// `core-live` the real `DoctorReport` replaces it (see `doctor_rows` in main.rs),
+// so this is unused in the core-live binary.
+#[cfg_attr(feature = "core-live", allow(dead_code))]
 fn dcheck(id: &str, sev: &str, note: &str) -> DoctorCheck {
     DoctorCheck { id: id.into(), sev: sev.into(), note: note.into() }
 }
+#[cfg_attr(feature = "core-live", allow(dead_code))]
 pub fn doctor() -> Vec<DoctorCheck> {
     vec![
         dcheck("audit-chain-integrity", "Pass", "verify_integrity ok · 11,402 records"),

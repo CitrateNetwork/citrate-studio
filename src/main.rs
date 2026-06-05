@@ -9,16 +9,10 @@
 // ui/studio.slint, so no runtime font registration is needed.
 
 mod data;
-// STUDIO-2 auth scaffold — pure for now; the UI sign-in surface + network
-// client land in a later STUDIO-2 commit. `allow(dead_code)` until wired.
-#[allow(dead_code)]
-mod auth;
-#[allow(dead_code)]
-mod signing;
-#[allow(dead_code)]
-mod config;
-#[allow(dead_code)]
-mod chain;
+mod auth;    // STUDIO-2 — OIDC + SIWE native loopback-PKCE client
+mod signing; // STUDIO-4 — ed25519 signer roster + enrollment
+mod config;  // STUDIO-5 — persisted setup + runtime discovery + capsule install
+mod chain;   // STUDIO-6 — live chain reads vs rpc.citrate.ai (40204)
 // STUDIO-3 — bridge to the real citrate-agent-core (only under `core-live`).
 #[cfg(feature = "core-live")]
 mod core_bridge;
@@ -459,7 +453,7 @@ fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
             let readonly = role == "Auditor";
             // SoD + approvability come from policy (the real core under
             // `core-live`); enrollment is the fail-closed gate on top.
-            let reason: Option<&str> = if enrolled.is_none() {
+            let reason: Option<&str> = if !st.roster.authorized(role) {
                 Some("No signer enrolled (fail-closed)")
             } else if proposer {
                 Some("Proposer can't self-approve")
@@ -884,13 +878,50 @@ fn set_chain_status(ui: &StudioWindow, st: chain::ChainStatus) {
     let app = ui.global::<AppState>();
     app.set_chain_online(st.online);
     app.set_chain_summary(
-        if st.online {
+        if !st.online {
+            "rpc.citrate.ai · unreachable".to_string()
+        } else if st.chain_id == chain::CHAIN_ID {
             format!("{} · #{} · live", st.chain_id, st.block)
         } else {
-            "rpc.citrate.ai · unreachable".to_string()
+            // connected, but not the chain we expect — flag it, don't trust it.
+            format!("⚠ wrong chain {} (expected {})", st.chain_id, chain::CHAIN_ID)
         }
         .into(),
     );
+    // Anchoring (chain write) readiness — needs a funded signer key.
+    app.set_anchor_ready(chain::anchor_available());
+}
+
+/// Dispatch the real `hello` capsule through wasmtime (core-live) and report.
+#[cfg(feature = "core-live")]
+fn smoke_capsule_result() -> String {
+    let dir = std::env::var("CITRATE_CAPSULES_DIR")
+        .unwrap_or_else(|_| "../citrate-agent-runtime/capsules".to_string());
+    match core_bridge::dispatch::LiveDispatch::load(&dir) {
+        Ok(d) => match d.greet("Aleia") {
+            Ok(s) => format!("hello capsule → \"{s}\" · {} capsules loaded", d.names().len()),
+            Err(e) => format!("dispatch error: {e}"),
+        },
+        Err(e) => format!("load error: {e}"),
+    }
+}
+#[cfg(not(feature = "core-live"))]
+fn smoke_capsule_result() -> String {
+    "real capsule dispatch needs the `core-live` build".to_string()
+}
+
+/// Run the capsule smoke test off-thread (wasmtime load is not instant).
+fn run_smoke_capsule(ui: &StudioWindow) {
+    ui.global::<AppState>().set_capsule_smoke("dispatching…".into());
+    let w = ui.as_weak();
+    std::thread::spawn(move || {
+        let result = smoke_capsule_result();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = w.upgrade() {
+                ui.global::<AppState>().set_capsule_smoke(result.into());
+            }
+        });
+    });
 }
 
 /// Probe `rpc.citrate.ai` off-thread and reflect the result (live path).
@@ -912,10 +943,57 @@ fn restore_session(ui: &StudioWindow) {
     if let Some(s) = auth::session_from_store(&auth_config(), &auth::KeyringTokenStore::citrate()) {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&s.wallet).into());
+        app.set_kyc_status(s.kyc.into());
     } else if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&w).into());
+        app.set_kyc_status(std::env::var("CITRATE_STUDIO_KYC").unwrap_or_default().into());
     }
+}
+
+/// The Health Report's doctor checks. Default = the modeled catalog; `core-live`
+/// = the real `DoctorReport` (runtime checks against a real audit chain).
+fn doctor_rows() -> Vec<DoctorCheck> {
+    #[cfg(not(feature = "core-live"))]
+    {
+        data::doctor()
+    }
+    #[cfg(feature = "core-live")]
+    {
+        core_bridge::doctor::report_rows()
+            .into_iter()
+            .map(|(name, sev, msg)| {
+                let sev = match sev.as_str() {
+                    "warn" => "Warn",
+                    "blocker" => "Blocker",
+                    _ => "Pass",
+                };
+                DoctorCheck { id: name.into(), sev: sev.into(), note: msg.into() }
+            })
+            .collect()
+    }
+}
+
+/// (status label, "N pass · M warn[ · K blocked]") from a set of checks.
+fn doctor_summary(rows: &[DoctorCheck]) -> (String, String) {
+    let pass = rows.iter().filter(|c| c.sev == "Pass").count();
+    let warn = rows.iter().filter(|c| c.sev == "Warn").count();
+    let block = rows.iter().filter(|c| c.sev == "Blocker").count();
+    let status = if block > 0 {
+        "DOCTOR · BLOCKED"
+    } else if warn > 0 {
+        "DOCTOR · ATTENTION"
+    } else {
+        "DOCTOR · HEALTHY"
+    };
+    let mut parts = vec![format!("{pass} pass")];
+    if warn > 0 {
+        parts.push(format!("{warn} warn"));
+    }
+    if block > 0 {
+        parts.push(format!("{block} blocked"));
+    }
+    (status.to_string(), parts.join(" · "))
 }
 
 fn seed_catalog(ui: &StudioWindow) {
@@ -924,7 +1002,11 @@ fn seed_catalog(ui: &StudioWindow) {
     app.set_tools_code(vm(data::tools_code()));
     app.set_capsules(vm(data::capsules()));
     app.set_frames(vm(data::frames()));
-    app.set_doctor(vm(data::doctor()));
+    let doctor = doctor_rows();
+    let (dstatus, dsummary) = doctor_summary(&doctor);
+    app.set_doctor_status(dstatus.into());
+    app.set_doctor_summary(dsummary.into());
+    app.set_doctor(vm(doctor));
     app.set_tripwires(vm(data::tripwires()));
     // signers are pushed from the real enrolled roster in refresh().
 }
@@ -1274,6 +1356,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             Ok(s) => {
                                 app.set_signed_in(true);
                                 app.set_wallet_address(trunc_wallet(&s.wallet).into());
+                                app.set_kyc_status(s.kyc.into());
                                 app.set_auth_status("".into());
                             }
                             Err(e) => {
@@ -1293,12 +1376,23 @@ fn main() -> Result<(), slint::PlatformError> {
                 let app = ui.global::<AppState>();
                 app.set_signed_in(false);
                 app.set_wallet_address("".into());
+                app.set_kyc_status("".into());
                 app.set_auth_status("".into());
             }
             // best-effort server revoke + clear, off-thread.
             std::thread::spawn(move || {
                 let _ = auth::logout(&auth_config(), &auth::KeyringTokenStore::citrate());
             });
+        });
+    }
+
+    // capsule smoke test — real wasmtime dispatch (core-live)
+    {
+        let w = ui.as_weak();
+        app.on_run_smoke_capsule(move || {
+            if let Some(ui) = w.upgrade() {
+                run_smoke_capsule(&ui);
+            }
         });
     }
 
@@ -1595,6 +1689,7 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
         let app = ui.global::<AppState>();
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&w).into());
+        app.set_kyc_status(std::env::var("CITRATE_STUDIO_KYC").unwrap_or_default().into());
     }
 
     // Render. Two passes so layout settles before the captured frame.
@@ -1789,6 +1884,20 @@ mod tests {
         live_sign(&mut s, &c3, &payload, "ComplianceOfficer");
         assert_eq!(s.signatures.len(), 2);
         assert!(s.quorum_met(), "High gate satisfied through the real ApprovalQueue");
+    }
+
+    #[test]
+    fn doctor_summary_counts_and_classifies() {
+        let mk = |sev: &str| DoctorCheck { id: "x".into(), sev: sev.into(), note: "".into() };
+        let (status, summary) = doctor_summary(&[mk("Pass"), mk("Warn"), mk("Pass")]);
+        assert_eq!(status, "DOCTOR · ATTENTION");
+        assert_eq!(summary, "2 pass · 1 warn");
+        assert_eq!(doctor_summary(&[mk("Pass")]).0, "DOCTOR · HEALTHY");
+        assert_eq!(doctor_summary(&[mk("Blocker")]).0, "DOCTOR · BLOCKED");
+        // the live seam yields a non-empty set with a coherent summary
+        let rows = doctor_rows();
+        assert!(!rows.is_empty());
+        let _ = doctor_summary(&rows);
     }
 
     #[test]

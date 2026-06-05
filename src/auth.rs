@@ -123,8 +123,7 @@ impl TokenSet {
 /// `sub` == `wallet_address` == an EIP-55 address.
 #[derive(Debug, Clone, Default)]
 pub struct Claims {
-    pub sub: String,
-    pub wallet_address: String,
+    pub wallet_address: String, // == the `sub` claim (EIP-55 address)
     pub kyc_status: Option<String>,
     pub iss: String,
     pub aud: String,
@@ -151,7 +150,6 @@ pub fn decode_claims(id_token: &str) -> Option<Claims> {
         })
         .unwrap_or_default();
     Some(Claims {
-        sub: s("sub").unwrap_or_default(),
         wallet_address: s("wallet_address").or_else(|| s("sub")).unwrap_or_default(),
         kyc_status: s("kyc_status"),
         iss: s("iss").unwrap_or_default(),
@@ -178,22 +176,23 @@ pub fn validate_claims(c: &Claims, cfg: &AuthConfig, now_unix: i64) -> Result<()
     Ok(())
 }
 
-/// Where session tokens are persisted. The real impl is the OS keyring
-/// (macOS Keychain / Windows Credential Manager / libsecret) — STUDIO-2 next
-/// step. `FileTokenStore` is dev-only and intentionally simple.
+/// Where session tokens are persisted. Production is `KeyringTokenStore` (OS
+/// keyring: macOS Keychain / Windows Credential Manager / libsecret); a
+/// plaintext `FileTokenStore` exists for tests only.
 pub trait TokenStore {
     fn load(&self) -> Option<TokenSet>;
     fn save(&self, tokens: &TokenSet) -> std::io::Result<()>;
     fn clear(&self) -> std::io::Result<()>;
 }
 
-/// DEV ONLY token store — plaintext JSON on disk. Do not ship; the keyring
-/// store replaces it. Present so the flow is testable end-to-end without a
-/// keyring dependency.
+/// Test-only token store — plaintext JSON on disk, so the flow is testable
+/// without touching the OS keyring. Production uses `KeyringTokenStore`.
+#[cfg(test)]
 pub struct FileTokenStore {
     pub path: std::path::PathBuf,
 }
 
+#[cfg(test)]
 impl TokenStore for FileTokenStore {
     fn load(&self) -> Option<TokenSet> {
         TokenSet::from_json(&std::fs::read_to_string(&self.path).ok()?)
@@ -242,38 +241,9 @@ impl TokenStore for KeyringTokenStore {
     }
 }
 
-// ---- identity → roster mapping (the seam STUDIO-4 builds on) ----
-
-/// `signer_id = SHA-256(pubkey)` as 64-char hex — identical to the runtime's
-/// `signer_id_from_pubkey` (`hitl/signing.rs`), so an enrolled signer's id
-/// matches what the core's `SignerRoster` records.
-pub fn signer_id_from_pubkey(pubkey: &[u8; 32]) -> String {
-    let digest = Sha256::digest(pubkey);
-    digest.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// One enrolled signer: an authenticated wallet, the ed25519 pubkey that will
-/// sign approvals (file/keyring/PIV/FIDO2 — STUDIO-4), the role, and the
-/// audit surface tag. Auth gives `wallet`; an admin chooses `role` + key.
-#[derive(Debug, Clone)]
-pub struct RosterEntry {
-    pub wallet: String,      // from auth (EIP-55 address)
-    pub pubkey_hex: String,  // ed25519 signer pubkey (32 bytes hex)
-    pub signer_id: String,   // SHA-256(pubkey)
-    pub role: String,        // Operator|Reviewer|ComplianceOfficer|SecurityOfficer|Auditor
-    pub surface: String,     // SigningSurfaceTag: Slint|FileBacked|...
-}
-
-/// Build a roster entry from an authenticated wallet + a signer pubkey + role.
-pub fn enroll(wallet: &str, pubkey: &[u8; 32], role: &str, surface: &str) -> RosterEntry {
-    RosterEntry {
-        wallet: wallet.to_string(),
-        pubkey_hex: pubkey.iter().map(|b| format!("{b:02x}")).collect(),
-        signer_id: signer_id_from_pubkey(pubkey),
-        role: role.to_string(),
-        surface: surface.to_string(),
-    }
-}
+// Identity → signer-roster enrollment lives in `signing.rs` (STUDIO-4):
+// `signing::signer_id`, `signing::Roster`. The earlier auth-side scaffold was
+// superseded and removed in the STUDIO-7 hardening pass.
 
 // =============================================================
 // Native loopback-PKCE login flow (RFC 8252).
@@ -549,14 +519,6 @@ mod tests {
         // redirect + scope are percent-encoded
         assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1"));
         assert!(url.contains("openid%20profile%20wallet"));
-    }
-
-    #[test]
-    fn signer_id_is_sha256_hex() {
-        let id = signer_id_from_pubkey(&[0u8; 32]);
-        assert_eq!(id.len(), 64);
-        // sha256 of 32 zero bytes:
-        assert_eq!(&id[..8], "66687aad");
     }
 
     #[test]

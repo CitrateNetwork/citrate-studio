@@ -298,13 +298,21 @@ component RuntimeSection inherits VerticalLayout {
         }
     }
     Text { text: "Model resolver · CIT-AGENT-3 · planned"; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; }
+    // Capsule smoke test — dispatches the real `hello` capsule through wasmtime
+    // (core-live). Proves the runtime executes signed capsule code end to end.
+    Rectangle { height: 8px; }
+    HorizontalLayout {
+        spacing: 10px; alignment: start;
+        Btn { text: "Run smoke capsule"; icon: "spark"; kind: "ghost"; sm: true; clicked => { AppState.run-smoke-capsule(); } }
+        if AppState.capsule-smoke != "": Text { text: AppState.capsule-smoke; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-1; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+    }
 }
 
 component PolicySection inherits VerticalLayout {
     spacing: 0;
     width: 560px;
     Row { k: "Policy bundle hash"; v: "sha256:e3b0…c442"; mono: true; }
-    Row { k: "Anchoring strategy"; v: "NightlyMerkle"; }
+    Row { k: "Anchoring strategy"; v: AppState.anchor-ready ? "NightlyMerkle · key ready" : "NightlyMerkle · read-only (no anchor key)"; }
     Row { k: "Chain (live)"; v: AppState.chain-summary; mono: true; danger: !AppState.chain-online; }
     Row { k: "Audit retention"; v: "90 days · mtime 6d"; }
     Row { k: "Break-glass window"; v: "72h affirmation"; }
