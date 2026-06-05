@@ -114,7 +114,7 @@ builds (`cargo test` and `cargo test --features core-live`). The *execution* sur
 `RecorderClient`) need a real runtime environment and land in STUDIO-5/6. See
 `.agentile/sprints/completed/2026-06/STUDIO-3-core-wiring.md`.
 
-### Auth (STUDIO-2)
+### Auth (STUDIO-2, closed)
 
 Sign-in is OIDC + SIWE against `citrate-identity` (registered as the native first-party
 client `citrate-studio`, loopback PKCE per RFC 8252). The pure scaffold ships
