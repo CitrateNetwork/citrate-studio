@@ -43,8 +43,25 @@ mod policy {
             _ => 0,
         }
     }
+    /// The approval decision itself — is the quorum satisfied by these signed
+    /// roles? Mirrors the core's `Quorum::satisfied_by`: NofM needs n hits from
+    /// the required set; Critical needs the fixed {SO, CO, Reviewer} multiset;
+    /// non-approving roles (Auditor) never count.
+    #[cfg(not(feature = "core-live"))]
+    pub fn quorum_satisfied(tier: &str, required: &[String], signed: &[String]) -> bool {
+        let usable: Vec<&String> = signed.iter().filter(|r| can_approve(r)).collect();
+        match tier {
+            "low" => true,
+            "medium" => usable.iter().any(|r| required.contains(r)),
+            "high" => usable.iter().filter(|r| required.contains(r)).count() >= 2,
+            "critical" => ["SecurityOfficer", "ComplianceOfficer", "Reviewer"]
+                .iter()
+                .all(|need| usable.iter().any(|r| r.as_str() == *need)),
+            _ => false,
+        }
+    }
     #[cfg(feature = "core-live")]
-    pub use crate::core_bridge::policy::{can_approve, is_conflict, quorum_n};
+    pub use crate::core_bridge::policy::{can_approve, is_conflict, quorum_n, quorum_satisfied};
 }
 
 /// Audit-chain verification seam. The scrubber's verdict (verify ok / count,
@@ -131,10 +148,11 @@ impl RunState {
     fn quorum_met(&self) -> bool {
         if let Some(id) = &self.pending {
             if let Some(c) = self.clip(id) {
-                // The required count comes from policy (the real core under
-                // `core-live`: Quorum::for_tier), not the clip's static field.
-                let need = policy::quorum_n(&c.risk, &roles_of(&c));
-                return self.signatures.len() as i32 >= need;
+                // The approval decision is the core's: Quorum::satisfied_by
+                // (under core-live), not a signature count in the UI.
+                let required = roles_of(&c);
+                let signed: Vec<String> = self.signatures.iter().map(|s| s.0.clone()).collect();
+                return policy::quorum_satisfied(&c.risk, &required, &signed);
             }
         }
         false
@@ -1302,6 +1320,23 @@ mod tests {
         assert!(co.reason.starts_with("SoD"), "reason: {}", co.reason);
         let rv = row("Reviewer");
         assert!(!rv.signed && !rv.disabled, "Reviewer still free to sign");
+    }
+
+    #[test]
+    fn quorum_satisfaction_matches_the_runtime() {
+        // Passes under default (modeled) and core-live (Quorum::satisfied_by).
+        let high = ["Reviewer".to_string(), "ComplianceOfficer".to_string(), "SecurityOfficer".to_string()];
+        // High = NofM{2}: two from the required set satisfy; one does not.
+        assert!(policy::quorum_satisfied("high", &high, &["Reviewer".into(), "ComplianceOfficer".into()]));
+        assert!(!policy::quorum_satisfied("high", &high, &["Reviewer".into()]));
+        // Auditor never counts toward a quorum.
+        assert!(!policy::quorum_satisfied("high", &high, &["Auditor".into(), "Auditor".into()]));
+        // Medium = OneOf: a single approver suffices.
+        assert!(policy::quorum_satisfied("medium", &["Reviewer".into()], &["Reviewer".into()]));
+        // Critical = Multiset{SO, CO, Reviewer}: all three required, regardless of manifest.
+        let all3 = ["SecurityOfficer".to_string(), "ComplianceOfficer".to_string(), "Reviewer".to_string()];
+        assert!(policy::quorum_satisfied("critical", &[], &all3));
+        assert!(!policy::quorum_satisfied("critical", &[], &["SecurityOfficer".into(), "Reviewer".into()]));
     }
 
     #[test]

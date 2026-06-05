@@ -71,6 +71,18 @@ pub mod policy {
             Quorum::Multiset(set) => set.len() as i32,
         }
     }
+
+    /// The approval decision, from the real `Quorum::satisfied_by` — handles
+    /// NofM / Multiset and filters non-approving roles (Auditor) itself.
+    pub fn quorum_satisfied(tier: &str, required: &[String], signed: &[String]) -> bool {
+        let t = match tier_from_str(tier) {
+            Some(t) => t,
+            None => return false,
+        };
+        let req: Vec<Role> = required.iter().filter_map(|s| role_from_str(s)).collect();
+        let sig: Vec<Role> = signed.iter().filter_map(|s| role_from_str(s)).collect();
+        Quorum::for_tier(t, &req).satisfied_by(&sig)
+    }
 }
 
 /// Real audit-chain integrity verification (STUDIO-3 step 5).
