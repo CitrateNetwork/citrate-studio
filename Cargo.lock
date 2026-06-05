@@ -1708,6 +1708,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "ureq",
+ "wasmtime",
 ]
 
 [[package]]

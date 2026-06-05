@@ -325,4 +325,71 @@ mod tests {
         // Two: quorum met through the REAL ApprovalQueue.
         assert!(lq.sign("c3", co.secret.unwrap(), "ComplianceOfficer").unwrap(), "quorum met end-to-end");
     }
+
+    #[test]
+    fn real_hello_capsule_dispatches_through_wasmtime() {
+        let dir = "../citrate-agent-runtime/capsules";
+        let d = match super::dispatch::LiveDispatch::load(dir) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skipping: capsule fleet not present ({e})");
+                return;
+            }
+        };
+        assert!(d.names().contains(&"hello".to_string()), "fleet: {:?}", d.names());
+        let out = d.greet("Aleia").expect("greet runs");
+        assert!(!out.is_empty(), "real ToolResult from wasmtime");
+        eprintln!("hello capsule returned: {out}");
+    }
+}
+
+/// Real capsule dispatch through wasmtime (STUDIO-6).
+///
+/// Points the runtime's `CapsuleDispatch` at the prebuilt capsule fleet in
+/// `citrate-agent-runtime/capsules/` and executes a real WASM component. The
+/// `hello` capsule's `greeter.greet(name)` is pure compute (no host imports),
+/// so it round-trips a real `ToolResult` with no chain/fs needed.
+pub mod dispatch {
+    use citrate_agent_core::capsule::dispatch::CapsuleDispatch;
+    use std::path::Path;
+    use wasmtime::component::Val;
+
+    pub struct LiveDispatch {
+        inner: CapsuleDispatch,
+    }
+
+    impl LiveDispatch {
+        /// Load every capsule (subdir with manifest.toml + capsule.wasm) from `dir`.
+        pub fn load(dir: &str) -> Result<Self, String> {
+            let inner = CapsuleDispatch::load_from_dir(Path::new(dir), None, None, None)
+                .map_err(|e| e.to_string())?;
+            Ok(Self { inner })
+        }
+
+        /// Names of the loaded fleet.
+        pub fn names(&self) -> Vec<String> {
+            self.inner.capsule_names()
+        }
+
+        /// Dispatch the `hello` capsule's `greet` — real wasmtime execution.
+        /// The shipped capsules carry placeholder content-hashes (signing is
+        /// CIT-AGENT-3e), so running them is a loudly-logged dev opt-in.
+        pub fn greet(&self, name: &str) -> Result<String, String> {
+            std::env::set_var("CITRATE_ALLOW_UNVERIFIED_CAPSULES", "1");
+            // the interface is exported package-qualified (wasmtime component model)
+            let out = self
+                .inner
+                .call_raw(
+                    "hello",
+                    "citrate:hello-capsule/greeter@0.1.0",
+                    "greet",
+                    &[Val::String(name.to_string())],
+                )
+                .map_err(|e| e.to_string())?;
+            match out {
+                Val::String(s) => Ok(s),
+                other => Err(format!("unexpected return: {other:?}")),
+            }
+        }
+    }
 }
