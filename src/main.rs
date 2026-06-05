@@ -146,6 +146,12 @@ struct RunState {
     live: Option<core_bridge::approvals::LiveQueue>,
     #[cfg(feature = "core-live")]
     live_open: Option<String>,
+    // STUDIO-10: clips that completed this tick (for real dispatch) + the real
+    // wasmtime ToolResult per clip id, and the loaded dispatcher (core-live).
+    just_completed: Vec<String>,
+    outputs: std::collections::HashMap<String, String>,
+    #[cfg(feature = "core-live")]
+    dispatch: Option<core_bridge::dispatch::LiveDispatch>,
 }
 
 impl RunState {
@@ -177,6 +183,8 @@ impl RunState {
         self.auto.clear();
         self.trip_fired = false;
         self.sign_error.clear();
+        self.just_completed.clear();
+        self.outputs.clear();
         #[cfg(feature = "core-live")]
         {
             self.live_open = None;
@@ -207,6 +215,7 @@ impl RunState {
             }
         }
         // side-effects on crossing boundaries
+        self.just_completed.clear();
         for c in &base {
             let cs = c.start as f32;
             let ce = (c.start + c.dur) as f32;
@@ -215,6 +224,10 @@ impl RunState {
             }
             if c.gate == "auto" && prev < ce && next >= ce && !self.auto.contains(&c.name.to_string()) {
                 self.auto.push(c.name.to_string());
+            }
+            // every clip that finishes this tick is a dispatch trigger (STUDIO-10)
+            if prev < ce && next >= ce {
+                self.just_completed.push(c.id.to_string());
             }
         }
         if !self.trip_fired && next >= 22.0 {
@@ -452,6 +465,41 @@ fn apply_sign(s: &mut RunState, role: &str) {
     }
 }
 
+/// Real capsule dispatch for clips that finished this tick (STUDIO-10).
+/// Under `core-live` each completed clip drives a real wasmtime execution; the
+/// result lands in `outputs` and surfaces as the output card's provenance badge.
+/// The demo `recon.*` clips have no matching capsule yet, so the run dispatches
+/// the real `hello` smoke capsule — proving the canvas drives real dispatch.
+#[cfg(feature = "core-live")]
+fn dispatch_completions(s: &mut RunState) {
+    if s.just_completed.is_empty() {
+        return;
+    }
+    if s.dispatch.is_none() {
+        let dir = std::env::var("CITRATE_CAPSULES_DIR")
+            .unwrap_or_else(|_| "../citrate-agent-runtime/capsules".to_string());
+        s.dispatch = core_bridge::dispatch::LiveDispatch::load(&dir).ok();
+    }
+    let ids = std::mem::take(&mut s.just_completed);
+    for id in ids {
+        let name = s.clip(&id).map(|c| c.name.to_string()).unwrap_or_default();
+        let result = if let Some(d) = &s.dispatch {
+            match d.greet(&name) {
+                Ok(r) => format!("wasmtime · hello(\"{name}\") → \"{r}\""),
+                Err(e) => format!("dispatch error: {e}"),
+            }
+        } else {
+            "capsule fleet unavailable".to_string()
+        };
+        s.outputs.insert(id, result);
+    }
+}
+#[cfg(not(feature = "core-live"))]
+fn dispatch_completions(s: &mut RunState) {
+    // default build: no real dispatcher; clear the trigger list.
+    s.just_completed.clear();
+}
+
 /// The dock "Resume" intent — approve the pending gate and continue the run.
 fn apply_resume(s: &mut RunState) {
     if let Some(id) = s.pending.take() {
@@ -542,7 +590,7 @@ fn derive_depth(ui: &StudioWindow, st: &RunState) -> &'static str {
 fn refresh(ui: &StudioWindow, st: &RunState) {
     let app = ui.global::<AppState>();
 
-    // dimmed-applied clips
+    // dimmed-applied clips + the real wasmtime dispatch result per clip (STUDIO-10)
     let clips: Vec<ClipData> = st
         .base
         .iter()
@@ -550,6 +598,9 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
             let mut c = c.clone();
             c.dimmed = st.dry.iter().any(|d| d.as_str() == c.id.as_str())
                 || st.solo.as_ref().map(|s| s.as_str() != c.id.as_str()).unwrap_or(false);
+            if let Some(out) = st.outputs.get(c.id.as_str()) {
+                c.live_output = out.clone().into();
+            }
             c
         })
         .collect();
@@ -681,6 +732,10 @@ fn new_state_with(roster: signing::Roster) -> Rc<RefCell<RunState>> {
         live: None,
         #[cfg(feature = "core-live")]
         live_open: None,
+        just_completed: Vec::new(),
+        outputs: std::collections::HashMap::new(),
+        #[cfg(feature = "core-live")]
+        dispatch: None,
     }))
 }
 
@@ -1061,23 +1116,51 @@ fn seed_catalog(ui: &StudioWindow) {
 }
 
 /// Apply a demo seed for screenshots / dev (mirrors shell.jsx SEED).
+/// Drive the REAL state machine (tick + real dispatch) to a target state, so
+/// seeds carry real wasmtime outputs (core-live) instead of hardcoded values.
 fn apply_seed(st: &Rc<RefCell<RunState>>, seed: &str) {
     let mut s = st.borrow_mut();
     match seed {
-        "running" => s.status = "running".into(),
-        "gate" => {
-            s.playhead = 18.0;
-            s.status = "paused".into();
-            s.pending = Some("c3".into());
-            s.medium = vec!["c2".into()];
-            s.auto = vec!["recon.snapshot".into()];
-            s.trip_fired = true;
+        // a few ticks in — first auto clip dispatched.
+        "running" => {
+            s.status = "running".into();
+            for _ in 0..20 {
+                if s.status != "running" {
+                    break;
+                }
+                s.tick();
+                dispatch_completions(&mut s);
+            }
         }
+        // run to the High gate pause (c1/c2 dispatched, c3 awaiting quorum).
+        "gate" => {
+            s.status = "running".into();
+            for _ in 0..400 {
+                if s.status != "running" {
+                    break;
+                }
+                s.tick();
+                dispatch_completions(&mut s);
+            }
+        }
+        // run to completion, auto-approving the gate (every clip dispatched).
         "done" => {
-            s.playhead = 56.0;
-            s.status = "done".into();
-            s.trip_fired = true;
-            s.auto = vec!["recon.snapshot".into(), "recon.anchor-merkle".into()];
+            s.status = "running".into();
+            for _ in 0..600 {
+                match s.status.as_str() {
+                    "running" => {}
+                    "paused" => {
+                        if let Some(id) = s.pending.take() {
+                            s.approved.push(id);
+                        }
+                        s.signatures.clear();
+                        s.status = "running".into();
+                    }
+                    _ => break,
+                }
+                s.tick();
+                dispatch_completions(&mut s);
+            }
         }
         _ => {}
     }
@@ -1571,6 +1654,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         return;
                     }
                     s.tick();
+                    dispatch_completions(&mut s); // STUDIO-10: real capsule dispatch
                 }
                 if let Some(ui) = w.upgrade() {
                     refresh(&ui, &st.borrow());
@@ -1873,6 +1957,30 @@ mod tests {
         assert!(!bad.ok, "tamper detected");
         assert_eq!(bad.break_seq, 6, "broken link at sequence 6");
         assert!(bad.message.contains("sequence 6"), "message: {}", bad.message);
+    }
+
+    #[cfg(feature = "core-live")]
+    #[test]
+    fn canvas_run_dispatches_real_capsules() {
+        // Driving the playback past clip completions runs real capsules through
+        // wasmtime and lands real ToolResults in `outputs`.
+        let st = new_state_with(signing::Roster::seed_demo());
+        let mut s = st.borrow_mut();
+        std::env::set_var("CITRATE_CAPSULES_DIR", "../citrate-agent-runtime/capsules");
+        s.status = "running".into();
+        for _ in 0..40 {
+            if s.status != "running" {
+                break; // pauses at the high gate after c1/c2 complete
+            }
+            s.tick();
+            dispatch_completions(&mut s);
+        }
+        assert!(!s.outputs.is_empty(), "the run dispatched real capsules");
+        assert!(
+            s.outputs.values().any(|v| v.contains("wasmtime")),
+            "real dispatch provenance: {:?}",
+            s.outputs.values().collect::<Vec<_>>()
+        );
     }
 
     #[cfg(feature = "core-live")]

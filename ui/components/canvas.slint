@@ -107,6 +107,16 @@ component OutputCard inherits Rectangle {
                 width: 100%;
             }
         }
+        // STUDIO-10: real wasmtime dispatch provenance (core-live)
+        if root.item.live-output != "": Rectangle {
+            border-radius: Theme.r-1; border-width: 1px; border-color: Theme.citrate-green-dark;
+            background: Theme.citrate-green.with-alpha(0.10);
+            HorizontalLayout {
+                padding-left: 7px; padding-right: 7px; padding-top: 4px; padding-bottom: 4px; spacing: 5px;
+                AppIcon { name: "spark"; size: 11px; tint: Theme.citrate-green-dark; y: (parent.height - self.height)/2; }
+                SelectableText { text: root.item.live-output; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.citrate-green-dark; wrap: word-wrap; single-line: false; horizontal-stretch: 1; }
+            }
+        }
         if root.open: Rectangle { height: 1px; background: Theme.stone-200; }
         if root.open: SelectableText {
             text: root.item.data-json;

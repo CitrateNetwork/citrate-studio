@@ -40,6 +40,7 @@ fn clip(
         risk: risk.into(), gate: gate.into(),
         caps: ss(caps), reads: ss(reads), writes: ss(writes), emits: ss(emits),
         start, dur, purpose: purpose.into(), output: output.into(),
+        live_output: "".into(),
         data_json: data_json.into(), publisher: publisher.into(),
         reproducible, sprint: sprint.into(), contracts: ss(contracts),
         quorum_n, quorum_roles: ss(quorum_roles), payload_hash: payload_hash.into(),

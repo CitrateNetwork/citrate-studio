@@ -22,6 +22,7 @@ export struct ClipData {
     dur: int,
     purpose: string,
     output: string,
+    live-output: string,     // STUDIO-10: real wasmtime dispatch result ("" = not run)
     data-json: string,       // pre-formatted structured ToolResult.data
     publisher: string,
     reproducible: bool,
