@@ -9,6 +9,10 @@
 // ui/studio.slint, so no runtime font registration is needed.
 
 mod data;
+// STUDIO-2 auth scaffold — pure for now; the UI sign-in surface + network
+// client land in a later STUDIO-2 commit. `allow(dead_code)` until wired.
+#[allow(dead_code)]
+mod auth;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;

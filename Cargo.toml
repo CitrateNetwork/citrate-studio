@@ -27,6 +27,13 @@ slint = { version = "1.16", default-features = false, features = [
 
 png = "0.17"
 
+# Auth scaffold (STUDIO-2): pure crypto/encoding for PKCE + signer_id.
+# The network/keyring deps (reqwest/tiny_http/jsonwebtoken/keyring) land
+# in a later, separately-reviewed STUDIO-2 commit per the ADR.
+sha2 = "0.10"
+base64 = "0.22"
+serde_json = "1"
+
 [build-dependencies]
 slint-build = "1.16"
 
