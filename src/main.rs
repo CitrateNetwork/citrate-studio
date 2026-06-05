@@ -551,6 +551,13 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
     app.set_sign_error(st.sign_error.clone().into());
     app.set_signers(vm(st.signers.clone())); // reflects the live enrolled roster
     app.set_roster_rows(vm(roster_rows(st)));
+    app.set_account_signer_id(
+        st.roster
+            .signer_for("Operator")
+            .map(|e| format!("signer_id {}", e.fp()))
+            .unwrap_or_else(|| "signer_id — (no operator key)".into())
+            .into(),
+    );
 
     // medium queue → clip data
     let mediums: Vec<ClipData> = st

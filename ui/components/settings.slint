@@ -267,8 +267,8 @@ component AccountSection inherits VerticalLayout {
     spacing: 0;
     width: 520px;
     Row { k: "Member"; v: "Aleia Rouhani"; }
-    Row { k: "Email"; v: "aleia.rouhani@boeing.com"; mono: true; }
-    Row { k: "Signer identity"; v: "signer_id f1a2…90de"; mono: true; }
+    Row { k: "Wallet"; v: AppState.signed-in ? AppState.wallet-address : "— not signed in —"; mono: true; }
+    Row { k: "Signer identity"; v: AppState.account-signer-id; mono: true; }
     Row { k: "Signing surface"; v: "Slint (native) · attested hardware"; }
     Row { k: "Default role"; v: "ComplianceOfficer"; }
     Rectangle { height: 10px; }

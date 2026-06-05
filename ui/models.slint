@@ -214,6 +214,7 @@ export global AppState {
     in property <bool> signed-in: false;
     in property <string> wallet-address;         // truncated display, e.g. 0x1a2b…90de
     in property <string> kyc-status;             // "verified" | "pending" | "" — from the ID token
+    in property <string> account-signer-id: "signer_id —"; // the operator's real signer_id
     in property <string> auth-status;            // "" | "signing" | "<error message>"
     callback sign-in();
     callback sign-out();
