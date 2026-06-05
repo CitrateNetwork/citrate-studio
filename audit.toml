@@ -1,9 +1,38 @@
 # cargo-audit configuration — citrate-studio
-# Per the federation SOP, every dependency advisory must either be
-# (a) closed by a dep bump/removal, or (b) ignored here with a
-# documented tracker + reason. Empty today: the dependency surface is
-# Slint + png only. Revisit when the auth client (reqwest/jsonwebtoken/
-# keyring) and agent-core (cdylib) deps land.
+# Per the federation SOP, every dependency advisory must either be (a) closed by
+# a dep bump/removal, or (b) ignored here with a documented tracker + reason.
+#
+# This is the canonical, documented advisory list. The reproducible CI check is
+# `cargo deny check advisories` (deny.toml mirrors the ignore below). cargo-audit
+# 0.22 takes ignores as flags, so for an ad-hoc scan:
+#   cargo audit --ignore RUSTSEC-2025-0055
+# STUDIO-2 (2026-06-04) added the auth client deps (ureq/rustls, tiny_http,
+# keyring/security-framework, getrandom); STUDIO-3 added the OPTIONAL `core-live`
+# dep on citrate-agent-core. The scan reflects the full Cargo.lock (994 crates),
+# including the optional tree. Result: 1 advisory (below), 6 informational
+# unmaintained warnings (non-failing); no vulnerabilities in the default build.
 
 [advisories]
-ignore = []
+ignore = [
+    # ─────────────────────────────────────────────────────────────────
+    # RUSTSEC-2025-0055 — tracing-subscriber <0.3.20 ANSI-escape / log
+    # injection (CWE-117). Verdict (upstream): TRUE POSITIVE, severity Low.
+    # ─────────────────────────────────────────────────────────────────
+    # Reaches the lock ONLY via the optional `core-live` dependency on
+    # `citrate-agent-core` (its arkworks/tracing tree). It is NOT compiled in
+    # the default shipping build (the feature is off), so the default binary is
+    # unaffected. Under `core-live` it inherits agent-core's already-tracked
+    # advisory — see `citrate-agent-runtime/audit.toml`, where it is ignored
+    # with the same Low verdict pending the upstream bump. Re-evaluate when
+    # agent-core closes it.
+    "RUSTSEC-2025-0055",
+]
+
+# Informational "unmaintained" warnings (NOT vulnerabilities; cargo-audit treats
+# them as allowed warnings and does not fail on them). All transitive, none in a
+# trust-bearing path, no action required — recorded for the audit trail:
+#   RUSTSEC-2025-0141 bincode      — transitive (sled/Slint trees)
+#   RUSTSEC-2024-0388 derivative   — transitive
+#   RUSTSEC-2024-0384 instant      — transitive
+#   RUSTSEC-2024-0436 paste        — transitive (wasmtime, under core-live)
+#   RUSTSEC-2025-0124 rand_os      — transitive

@@ -645,6 +645,40 @@ fn set_audit_verdict(ui: &StudioWindow, tampered: bool) {
     app.set_scrubber_break_seq(v.break_seq);
 }
 
+/// Auth client config — `auth.citrate.ai` by default; `CITRATE_STUDIO_ISSUER`
+/// overrides it (e.g. a local `http://localhost:3000` identity server).
+fn auth_config() -> auth::AuthConfig {
+    let mut c = auth::AuthConfig::default();
+    if let Ok(iss) = std::env::var("CITRATE_STUDIO_ISSUER") {
+        c.issuer = iss;
+    }
+    c
+}
+
+/// `0x1a2b3c…90de` display form of a wallet address.
+fn trunc_wallet(w: &str) -> String {
+    let chars: Vec<char> = w.chars().collect();
+    if chars.len() <= 12 {
+        w.to_string()
+    } else {
+        let head: String = chars[..6].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}…{tail}")
+    }
+}
+
+/// Reflect the stored session (or a dev `CITRATE_STUDIO_SIGNEDIN` seed) into the UI.
+fn restore_session(ui: &StudioWindow) {
+    let app = ui.global::<AppState>();
+    if let Some(s) = auth::session_from_store(&auth_config(), &auth::KeyringTokenStore::citrate()) {
+        app.set_signed_in(true);
+        app.set_wallet_address(trunc_wallet(&s.wallet).into());
+    } else if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
+        app.set_signed_in(true);
+        app.set_wallet_address(trunc_wallet(&w).into());
+    }
+}
+
 fn seed_catalog(ui: &StudioWindow) {
     let app = ui.global::<AppState>();
     app.set_tools_chain(vm(data::tools_chain()));
@@ -693,6 +727,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let st = new_state();
     refresh(&ui, &st.borrow());
     set_audit_verdict(&ui, false);
+    restore_session(&ui);
 
     // ---- helper to refresh from a weak handle ----
     let refresh_weak = {
@@ -923,6 +958,51 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     app.on_ttl_fmt(|s| format!("{}:{:02}", s / 60, s % 60).into());
+
+    // ---- auth: OIDC + SIWE loopback PKCE (off-thread; result → event loop) ----
+    {
+        let w = ui.as_weak();
+        app.on_sign_in(move || {
+            if let Some(ui) = w.upgrade() {
+                ui.global::<AppState>().set_auth_status("signing".into());
+            }
+            let weak = w.clone();
+            std::thread::spawn(move || {
+                let result = auth::login(&auth_config(), &auth::KeyringTokenStore::citrate());
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        let app = ui.global::<AppState>();
+                        match result {
+                            Ok(s) => {
+                                app.set_signed_in(true);
+                                app.set_wallet_address(trunc_wallet(&s.wallet).into());
+                                app.set_auth_status("".into());
+                            }
+                            Err(e) => {
+                                app.set_signed_in(false);
+                                app.set_auth_status(e.to_string().into());
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+    {
+        let w = ui.as_weak();
+        app.on_sign_out(move || {
+            if let Some(ui) = w.upgrade() {
+                let app = ui.global::<AppState>();
+                app.set_signed_in(false);
+                app.set_wallet_address("".into());
+                app.set_auth_status("".into());
+            }
+            // best-effort server revoke + clear, off-thread.
+            std::thread::spawn(move || {
+                let _ = auth::logout(&auth_config(), &auth::KeyringTokenStore::citrate());
+            });
+        });
+    }
 
     // audit scrubber — recompute the real verify_integrity verdict on toggle
     {
@@ -1205,6 +1285,11 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
     }
     refresh(&ui, &st.borrow());
     set_audit_verdict(&ui, std::env::var("CITRATE_STUDIO_TAMPER").is_ok());
+    if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
+        let app = ui.global::<AppState>();
+        app.set_signed_in(true);
+        app.set_wallet_address(trunc_wallet(&w).into());
+    }
 
     // Render. Two passes so layout settles before the captured frame.
     let mut buf = vec![PremultipliedRgbaColor::default(); (w * h) as usize];

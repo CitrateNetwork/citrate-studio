@@ -281,6 +281,42 @@ export component Chrome inherits Rectangle {
                         color: Theme.sealed-fg-2;
                         vertical-alignment: center;
                     }
+                    // ---- auth / session chip (STUDIO-2) ----
+                    auth-chip := Rectangle {
+                        property <bool> signing: AppState.auth-status == "signing";
+                        property <bool> err: AppState.auth-status != "" && !self.signing && !AppState.signed-in;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: Theme.r-pill;
+                        border-width: 1px;
+                        border-color: auth-chip.err ? Theme.danger : (AppState.signed-in ? Theme.sealed-border-2 : Theme.citrate-green);
+                        background: AppState.signed-in || auth-chip.signing ? transparent : (auth-chip.err ? Theme.danger.with-alpha(0.18) : Theme.citrate-green);
+                        HorizontalLayout {
+                            padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px; spacing: 6px;
+                            if AppState.signed-in: Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: Theme.citrate-green; y: (parent.height - self.height)/2; }
+                            Text {
+                                text: auth-chip.signing ? "Signing in…"
+                                    : AppState.signed-in ? AppState.wallet-address
+                                    : auth-chip.err ? "Sign-in failed — retry"
+                                    : "Sign in";
+                                font-family: AppState.signed-in ? Theme.font-mono : Theme.font-sans;
+                                font-size: AppState.signed-in ? 10.5px : 11px;
+                                font-weight: 500;
+                                letter-spacing: AppState.signed-in ? 0.3px : 0;
+                                color: auth-chip.err ? Theme.danger
+                                    : AppState.signed-in ? Theme.sealed-fg
+                                    : auth-chip.signing ? Theme.sealed-fg-2 : Theme.ink;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: auth-chip.signing ? default : pointer;
+                            clicked => {
+                                if (!auth-chip.signing) {
+                                    if (AppState.signed-in) { AppState.sign-out(); } else { AppState.sign-in(); }
+                                }
+                            }
+                        }
+                    }
                     // workspace toggle
                     Rectangle {
                         border-radius: Theme.r-1;

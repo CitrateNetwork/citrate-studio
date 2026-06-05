@@ -191,6 +191,13 @@ export global AppState {
     callback set-oversight(string);
     callback set-search(string);
 
+    // ---- auth (STUDIO-2: OIDC + SIWE via citrate-identity) ----
+    in property <bool> signed-in: false;
+    in property <string> wallet-address;         // truncated display, e.g. 0x1a2b…90de
+    in property <string> auth-status;            // "" | "signing" | "<error message>"
+    callback sign-in();
+    callback sign-out();
+
     // ---- entry / view ----
     in-out property <string> view: "studio";    // studio | onboard
 
