@@ -1028,6 +1028,46 @@ fn run_smoke_capsule(ui: &StudioWindow) {
     });
 }
 
+/// Anchor the audit-chain root on chain 40204 (real tx). Blocking; off-thread.
+#[cfg(feature = "core-live")]
+fn anchor_result() -> String {
+    let key = match std::env::var("CITRATE_ANCHOR_KEY") {
+        Ok(k) => k,
+        Err(_) => return "set CITRATE_ANCHOR_KEY to anchor".to_string(),
+    };
+    let frames: Vec<(u64, String, String)> = data::frames()
+        .iter()
+        .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
+        .collect();
+    let root = core_bridge::audit::root(&frames);
+    let res = core_bridge::anchor::anchor_root(&key, root);
+    if res.ok {
+        let tx = if res.tx_hash.len() >= 12 { &res.tx_hash[..12] } else { &res.tx_hash };
+        let from = if res.from.len() >= 8 { &res.from[..8] } else { &res.from };
+        format!("anchored from {from}… · {tx}… · block {}", res.block)
+    } else {
+        format!("anchor failed: {}", res.message)
+    }
+}
+#[cfg(not(feature = "core-live"))]
+fn anchor_result() -> String {
+    "real anchoring needs the `core-live` build".to_string()
+}
+
+/// Run the anchor off-thread (a real tx takes a few seconds) and reflect it.
+fn run_anchor(ui: &StudioWindow) {
+    ui.global::<AppState>().set_anchor_status("anchoring on 40204…".into());
+    let w = ui.as_weak();
+    std::thread::spawn(move || {
+        let r = anchor_result();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = w.upgrade() {
+                ui.global::<AppState>().set_anchor_status(r.into());
+            }
+        });
+    });
+}
+
 /// Probe `rpc.citrate.ai` off-thread and reflect the result (live path).
 fn refresh_chain_async(ui: &StudioWindow) {
     let w = ui.as_weak();
@@ -1485,6 +1525,15 @@ fn main() -> Result<(), slint::PlatformError> {
         app.on_run_smoke_capsule(move || {
             if let Some(ui) = w.upgrade() {
                 run_smoke_capsule(&ui);
+            }
+        });
+    }
+    // anchor the audit root on chain 40204 (real tx, core-live)
+    {
+        let w = ui.as_weak();
+        app.on_anchor_now(move || {
+            if let Some(ui) = w.upgrade() {
+                run_anchor(&ui);
             }
         });
     }

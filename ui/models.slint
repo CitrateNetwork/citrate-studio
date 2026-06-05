@@ -205,6 +205,8 @@ export global AppState {
     in property <bool> chain-online: false;
     in property <string> chain-summary: "rpc.citrate.ai · probing…";
     in property <bool> anchor-ready: false;   // chain-write key present? (STUDIO-7)
+    in property <string> anchor-status;       // STUDIO-12: anchor tx result
+    callback anchor-now();
 
     // ---- signer roster (STUDIO-4: real ed25519 enrollment) ----
     in property <[RosterRow]> roster-rows;

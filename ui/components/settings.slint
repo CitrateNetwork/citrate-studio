@@ -322,6 +322,9 @@ component PolicySection inherits VerticalLayout {
         spacing: 10px; alignment: start;
         Btn { text: "Export policy"; icon: "download"; kind: "ghost"; sm: true; }
         Btn { text: "Run doctor"; icon: "shield"; kind: "ghost"; sm: true; }
+        // STUDIO-12: anchor the audit root on chain 40204 (real tx)
+        Btn { text: "Anchor audit root"; icon: "anchor"; kind: AppState.anchor-ready ? "primary" : "ghost"; sm: true; clicked => { AppState.anchor-now(); } }
+        if AppState.anchor-status != "": Text { text: AppState.anchor-status; font-family: Theme.font-mono; font-size: 11px; color: Theme.citrate-green-dark; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
     }
 }
 

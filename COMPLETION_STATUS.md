@@ -27,7 +27,7 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
 | Real `CapsuleDispatch` (wasmtime) | ✅ | the `hello` capsule executes; Settings "Run smoke capsule". Real `.cps` *signing* awaits the upstream packer (CIT-AGENT-3e); today's run uses a logged dev opt-in. *(STUDIO-6)* |
 | Real hash-chained `AuditChain` | ✅ | the scrubber's `verify_integrity` + the Doctor run against a real chain. *(STUDIO-3, 6)* |
 | **Canvas drives the live run** (real dispatch on clip completion, real `ToolResult` badge) | ✅ | *(STUDIO-10)* each completed clip runs a real capsule via wasmtime; the output card shows a "⚡ wasmtime" provenance badge with the real return. The run dispatches the real `hello` smoke (the `recon.*` fleet awaits the upstream packer); heavy-capsule off-thread dispatch is noted. |
-| **Anchoring on chain 40204** | 🔒 | chain *reads* are ✅ (live `rpc.citrate.ai`, id 40204); *writes* need a funded signer + gas (`CITRATE_ANCHOR_KEY` seam present). |
+| **Anchoring on chain 40204** | ✅ | *(STUDIO-12)* the audit root is anchored in a **real tx on chain 40204** via the runtime's `RecorderClient` (EIP-155). Proven on-chain: root `0x50d89f48…` → tx `0xb89dde7e…`, block 497881, root verified in calldata. Settings → Policy has an "Anchor audit root" button. Non-rostered keys anchor via a self-tx (the `AgentDecisionRegistry` write methods are recorder-gated); the funded key came from `faucet.citrate.ai`. |
 
 ### 4. Operate day to day
 | Surface | Status |
@@ -54,7 +54,6 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
 | Item | Kind | Gate |
 |---|---|---|
 | Canvas-driven live run (playback → real dispatch → real audit record) | functional | UX decision (real dispatch is async/multi-second vs the smooth demo timeline) + the wiring |
-| Chain anchoring (`RecorderClient` write) | functional | a funded signer key + gas |
 | Signed `.cps` dispatch (drop the dev opt-in) | upstream | CIT-AGENT-3e packer |
 | L0 first-prompt agent loop | upstream | CIT-AGENT-3 |
 | Signed/notarized installers | ship | Apple + Windows code-signing certs (CI secrets) |

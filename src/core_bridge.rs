@@ -192,6 +192,26 @@ pub mod audit {
             Err(e) => err_verdict(&e.to_string()),
         }
     }
+
+    /// The audit-chain tip (`last_hash`) built from the frames — the 32-byte root
+    /// to anchor on chain. Binds every record up to the tip. (STUDIO-12)
+    pub fn root(frames: &[(u64, String, String)]) -> [u8; 32] {
+        let sink: Arc<dyn AuditSink> = Arc::new(MemSink::new());
+        let genesis = GenesisInfo {
+            agent_did: "did:citrate:core".into(),
+            harness_version: "citrate-studio".into(),
+            policy_bundle_hash: [0u8; 32],
+            doctor_report_hash: [0u8; 32],
+        };
+        let mut chain = match AuditChain::open_or_init(sink, genesis, 0) {
+            Ok(c) => c,
+            Err(_) => return [0u8; 32],
+        };
+        for (_, evt, actor) in frames.iter().skip(1) {
+            let _ = chain.append(event_type(evt), evt.as_bytes().to_vec(), actor.clone(), Vec::new(), None, 0);
+        }
+        chain.last_hash()
+    }
 }
 
 /// Live HITL approval through the REAL async `ApprovalQueue` (STUDIO-6).
@@ -330,6 +350,29 @@ mod tests {
     }
 
     #[test]
+    fn real_anchor_on_chain_40204() {
+        // Opt-in: sends a REAL transaction (costs gas), so only runs when asked.
+        if std::env::var("CITRATE_ANCHOR_LIVE").is_err() {
+            eprintln!("skip: set CITRATE_ANCHOR_LIVE=1 + CITRATE_ANCHOR_KEY for a real anchor");
+            return;
+        }
+        let key = std::env::var("CITRATE_ANCHOR_KEY").expect("CITRATE_ANCHOR_KEY");
+        let frames: Vec<(u64, String, String)> = crate::data::frames()
+            .iter()
+            .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
+            .collect();
+        let root = super::audit::root(&frames);
+        eprintln!("audit root: 0x{}", root.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let res = super::anchor::anchor_root(&key, root);
+        eprintln!(
+            "anchor: from={} ok={} tx={} block={} · {}",
+            res.from, res.ok, res.tx_hash, res.block, res.message
+        );
+        assert!(res.ok, "anchor failed: {}", res.message);
+        assert!(!res.tx_hash.is_empty());
+    }
+
+    #[test]
     fn real_hello_capsule_dispatches_through_wasmtime() {
         let dir = "../citrate-agent-runtime/capsules";
         let d = match super::dispatch::LiveDispatch::load(dir) {
@@ -465,6 +508,65 @@ pub mod doctor {
         match run_report() {
             Ok(r) => r.results.into_iter().map(|c| (c.name, c.severity.as_str().to_string(), c.message)).collect(),
             Err(e) => vec![("doctor".into(), "blocker".into(), e)],
+        }
+    }
+}
+
+/// Real on-chain anchoring of the audit root (STUDIO-12).
+///
+/// Uses the runtime's `RecorderClient` (secp256k1, EIP-155, chain 40204) to write
+/// the audit-chain root in a real transaction on `rpc.citrate.ai`. The shipped
+/// `AgentDecisionRegistry` write methods are recorder-gated on the contract side,
+/// so a non-rostered key uses a *self-transaction carrying the root as calldata* —
+/// the root is then permanently on-chain and readable (tamper-evident), needing
+/// only gas, no contract authorization.
+pub mod anchor {
+    use citrate_agent_core::audit::recorder::RecorderClient;
+    use std::time::Duration;
+
+    pub const RPC: &str = "https://rpc.citrate.ai";
+
+    pub struct AnchorResult {
+        pub ok: bool,
+        pub tx_hash: String,
+        pub block: u64,
+        pub from: String,
+        pub message: String,
+    }
+
+    /// Anchor a 32-byte root in a real chain-40204 transaction. Blocking — call
+    /// off the UI thread.
+    pub fn anchor_root(key_hex: &str, root: [u8; 32]) -> AnchorResult {
+        let rec = match RecorderClient::from_hex_key(key_hex, RPC) {
+            Some(r) => r,
+            None => {
+                return AnchorResult {
+                    ok: false,
+                    tx_hash: String::new(),
+                    block: 0,
+                    from: String::new(),
+                    message: "invalid anchor key".into(),
+                }
+            }
+        };
+        let from = rec.from_address().to_string();
+        let to = from.clone();
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => {
+                return AnchorResult { ok: false, tx_hash: String::new(), block: 0, from, message: format!("runtime: {e}") }
+            }
+        };
+        let res = rt.block_on(rec.send_tx_and_wait(&to, root.to_vec(), 40_000, Duration::from_secs(90)));
+        match res {
+            Ok(r) => AnchorResult {
+                ok: r.status,
+                tx_hash: r.tx_hash,
+                block: r.block_number,
+                from,
+                message: if r.status { format!("anchored · block {}", r.block_number) } else { "tx reverted".into() },
+            },
+            Err(e) => AnchorResult { ok: false, tx_hash: String::new(), block: 0, from, message: e },
         }
     }
 }
