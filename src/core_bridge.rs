@@ -341,6 +341,22 @@ mod tests {
         assert!(!out.is_empty(), "real ToolResult from wasmtime");
         eprintln!("hello capsule returned: {out}");
     }
+
+    #[test]
+    fn real_doctor_report_runs_against_a_real_chain() {
+        let r = super::doctor::run_report().expect("doctor runs");
+        assert_eq!(r.results.len(), 3, "audit-integrity + permissions + runtime");
+        // the audit chain we wrote is valid → no Blocker from integrity
+        use citrate_agent_core::doctor::report::Severity;
+        assert!(
+            !r.results.iter().any(|c| matches!(c.severity, Severity::Blocker)),
+            "a valid chain yields no blocker: {:?}",
+            r.results.iter().map(|c| (&c.name, c.severity.as_str())).collect::<Vec<_>>()
+        );
+        for c in &r.results {
+            eprintln!("doctor: {} = {} ({})", c.name, c.severity.as_str(), c.message);
+        }
+    }
 }
 
 /// Real capsule dispatch through wasmtime (STUDIO-6).
@@ -390,6 +406,62 @@ pub mod dispatch {
                 Val::String(s) => Ok(s),
                 other => Err(format!("unexpected return: {other:?}")),
             }
+        }
+    }
+}
+
+/// Real Doctor report (STUDIO-6).
+///
+/// Writes a small REAL audit chain to a temp file (genesis + a couple events),
+/// then runs the runtime's own checks against it — `AuditChainIntegrityCheck`
+/// verifies the chain for real, `AuditFilePermissionsCheck` inspects the file,
+/// `RuntimeCheck` reports the async-sink posture. Real `Severity` results, not
+/// a modeled list.
+pub mod doctor {
+    use citrate_agent_core::audit::record::EventType;
+    use citrate_agent_core::audit::{AuditChain, AuditSink, FilesystemSink, GenesisInfo};
+    use citrate_agent_core::doctor::checks::{
+        AuditChainIntegrityCheck, AuditFilePermissionsCheck, Check, DoctorContext, RuntimeCheck,
+    };
+    use citrate_agent_core::doctor::report::DoctorReport;
+    use std::sync::Arc;
+
+    pub fn run_report() -> Result<DoctorReport, String> {
+        let path = std::env::temp_dir().join(format!("citrate-studio-doctor-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let sink: Arc<dyn AuditSink> = Arc::new(FilesystemSink::open(&path).map_err(|e| e.to_string())?);
+        let genesis = GenesisInfo {
+            agent_did: "did:citrate:studio".into(),
+            harness_version: "citrate-studio".into(),
+            policy_bundle_hash: [0u8; 32],
+            doctor_report_hash: [0u8; 32],
+        };
+        let mut chain = AuditChain::open_or_init(sink, genesis, 0).map_err(|e| e.to_string())?;
+        chain.append(EventType::Proposal, b"recon.match-phi".to_vec(), "did:citrate:op".into(), vec![], None, 0).map_err(|e| e.to_string())?;
+        chain.append(EventType::Approval, b"approved".to_vec(), "did:citrate:reviewer".into(), vec![], None, 0).map_err(|e| e.to_string())?;
+
+        let ctx = DoctorContext {
+            agent_did: "did:citrate:studio".into(),
+            now_unix: 0,
+            audit_chain_path: Some(path.clone()),
+            approval_queue: None,
+            break_glass: None,
+        };
+        let checks: Vec<Box<dyn Check>> = vec![
+            Box::new(AuditChainIntegrityCheck),
+            Box::new(AuditFilePermissionsCheck),
+            Box::new(RuntimeCheck),
+        ];
+        let report = citrate_agent_core::doctor::run(&ctx, &checks);
+        let _ = std::fs::remove_file(&path);
+        Ok(report)
+    }
+
+    /// (name, severity, message) rows for the UI Health Report.
+    pub fn report_rows() -> Vec<(String, String, String)> {
+        match run_report() {
+            Ok(r) => r.results.into_iter().map(|c| (c.name, c.severity.as_str().to_string(), c.message)).collect(),
+            Err(e) => vec![("doctor".into(), "blocker".into(), e)],
         }
     }
 }
