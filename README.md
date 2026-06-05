@@ -86,8 +86,35 @@ assets/brand/      — the C-mark
 The trust boundary is explicit: **the front end never makes a policy decision.** Quorum,
 SoD (CO ⊥ SO, Auditor never approves, no self-approval), and the hash-pin are computed in
 `main.rs` and handed to the UI as ready-to-render state (`approval-roster`, `quorum-met`).
-When this is wired to the real `citrate-agent-core` (`cdylib`), those computations move
-behind the Rust core unchanged — the UI is already only a viewport.
+When this is wired to the real `citrate-agent-core`, those computations move behind the
+Rust core unchanged — the UI is already only a viewport.
+
+### Wiring the real core (`core-live`) — STUDIO-3, in progress
+
+The real `citrate-agent-core` is an **optional, feature-gated** dependency so the
+default build stays fast (no `wasmtime`, no SSH dep):
+
+```sh
+cargo build                      # default — modeled core, fast
+cargo build --features core-live # real citrate-agent-core (wasmtime 45 + cached wallet-core)
+```
+
+The integration grows through a **policy seam** (`policy` in `main.rs` + `core_bridge.rs`):
+separation-of-duties and quorum compute through `policy::{is_conflict, can_approve,
+quorum_n}` — the default is a faithful hand-rolled copy of the runtime's rules; under
+`core-live` it delegates to the authoritative `citrate_agent_core::hitl::{is_conflict,
+can_approve, Quorum::for_tier}`. Callers don't know which is compiled — the concrete proof
+that wiring the real core is a *swap*, not a rewrite. Subsequent STUDIO-3 steps extend the
+same pattern to `AuditChain::verify_integrity`, the async `ApprovalQueue`, the signed
+`DoctorReport`, and `CapsuleDispatch`. See
+`.agentile/sprints/active/STUDIO-3-core-wiring.md`.
+
+### Auth (STUDIO-2)
+
+Sign-in is OIDC + SIWE against `citrate-identity` (registered as the native first-party
+client `citrate-studio`, loopback PKCE per RFC 8252). The pure scaffold ships
+(`src/auth.rs`: PKCE, tokens, store, `signer_id`); the network/keyring/UI land in a later
+STUDIO-2 commit. See `.agentile/adrs/ADR-2026-06-04-auth-oidc-siwe.md`.
 
 ### Dev: headless screenshots
 

@@ -34,6 +34,16 @@ sha2 = "0.10"
 base64 = "0.22"
 serde_json = "1"
 
+# STUDIO-3 — the real runtime core, behind the `core-live` feature (off by
+# default). Pulls wasmtime 45 + an SSH-sourced citrate-wallet-core (rev cached
+# locally), so it stays optional while the integration matures subsystem by
+# subsystem. When all subsystems are live, `core-live` becomes default and the
+# in-process model is deleted.
+citrate-agent-core = { path = "../citrate-agent-runtime/agent/core", optional = true }
+
+[features]
+core-live = ["dep:citrate-agent-core"]
+
 [build-dependencies]
 slint-build = "1.16"
 

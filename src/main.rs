@@ -13,6 +13,39 @@ mod data;
 // client land in a later STUDIO-2 commit. `allow(dead_code)` until wired.
 #[allow(dead_code)]
 mod auth;
+// STUDIO-3 — bridge to the real citrate-agent-core (only under `core-live`).
+#[cfg(feature = "core-live")]
+mod core_bridge;
+
+/// Policy seam — separation-of-duties + quorum. The default build keeps a
+/// faithful hand-rolled copy of the runtime's rules; the `core-live` feature
+/// swaps in the authoritative `citrate-agent-core` (see core_bridge.rs).
+/// Callers compute through `policy::*` and never know which is compiled — the
+/// concrete proof that wiring the real core is a swap, not a rewrite.
+mod policy {
+    #[cfg(not(feature = "core-live"))]
+    pub fn is_conflict(a: &str, b: &str) -> bool {
+        matches!(
+            (a, b),
+            ("ComplianceOfficer", "SecurityOfficer") | ("SecurityOfficer", "ComplianceOfficer")
+        )
+    }
+    #[cfg(not(feature = "core-live"))]
+    pub fn can_approve(role: &str) -> bool {
+        role != "Auditor"
+    }
+    #[cfg(not(feature = "core-live"))]
+    pub fn quorum_n(tier: &str, _manifest_roles: &[String]) -> i32 {
+        match tier {
+            "medium" => 1,
+            "high" => 2,
+            "critical" => 3,
+            _ => 0,
+        }
+    }
+    #[cfg(feature = "core-live")]
+    pub use crate::core_bridge::policy::{can_approve, is_conflict, quorum_n};
+}
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
@@ -65,7 +98,10 @@ impl RunState {
     fn quorum_met(&self) -> bool {
         if let Some(id) = &self.pending {
             if let Some(c) = self.clip(id) {
-                return self.signatures.len() as i32 >= c.quorum_n;
+                // The required count comes from policy (the real core under
+                // `core-live`: Quorum::for_tier), not the clip's static field.
+                let need = policy::quorum_n(&c.risk, &roles_of(&c));
+                return self.signatures.len() as i32 >= need;
             }
         }
         false
@@ -172,8 +208,6 @@ fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
     };
     let gate_roles = roles_of(&pending);
     let signed: Vec<String> = st.signatures.iter().map(|s| s.0.clone()).collect();
-    let has_co = signed.iter().any(|r| r == "ComplianceOfficer");
-    let has_so = signed.iter().any(|r| r == "SecurityOfficer");
     let met = st.quorum_met();
 
     st.signers
@@ -188,15 +222,16 @@ fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
                 .find(|x| x.0 == role)
                 .map(|x| x.2.clone())
                 .unwrap_or_default();
+            // SoD + approvability come from policy (the real core under
+            // `core-live`). A candidate is conflicted if any already-signed
+            // role conflicts with it (CO ⊥ SO).
             let reason: Option<&str> = if s.proposer {
                 Some("Proposer can't self-approve")
-            } else if s.readonly {
+            } else if s.readonly || !policy::can_approve(&role) {
                 Some("Auditor never approves")
             } else if is_signed {
                 Some("Signed")
-            } else if role == "ComplianceOfficer" && has_so {
-                Some("SoD · CO ⊥ SO")
-            } else if role == "SecurityOfficer" && has_co {
+            } else if signed.iter().any(|sr| policy::is_conflict(&role, sr)) {
                 Some("SoD · CO ⊥ SO")
             } else if met {
                 Some("Quorum met")
@@ -275,7 +310,12 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
         .unwrap_or(false);
     app.set_has_pending(is_high);
     app.set_pending_clip(pending_clip.clone().unwrap_or_default());
-    app.set_quorum_need(pending_clip.as_ref().map(|c| c.quorum_n).unwrap_or(0));
+    app.set_quorum_need(
+        pending_clip
+            .as_ref()
+            .map(|c| policy::quorum_n(&c.risk, &roles_of(c)))
+            .unwrap_or(0),
+    );
     app.set_quorum_met(st.quorum_met());
     app.set_approval_roster(vm(approval_roster(st)));
 
