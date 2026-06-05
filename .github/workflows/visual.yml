@@ -1,0 +1,35 @@
+name: visual
+
+# Visual regression gate for the NATIVE Slint app (software-renderer snapshots).
+# Pinned to macOS because the committed golden baselines in docs/visual/baseline/
+# are macOS-rendered; software-renderer anti-aliasing can differ across OSes, so a
+# cross-platform pixel diff would be noisy. Re-baseline per platform if needed
+# (scripts/visual-harness.sh update). Not Playwright — this is a desktop app.
+
+on:
+  pull_request:
+    paths:
+      - "ui/**"
+      - "src/**"
+      - "assets/**"
+      - "scripts/visual-*.sh"
+      - "scripts/gallery.py"
+  workflow_dispatch:
+
+jobs:
+  visual:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Pillow (image diff)
+        run: pip3 install --quiet pillow
+      - name: Visual regression check
+        run: scripts/visual-harness.sh check
+      - name: Upload gallery + diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-gallery
+          path: docs/visual/gallery/**
