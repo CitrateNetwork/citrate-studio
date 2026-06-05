@@ -35,29 +35,31 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
 | Audit Scrubber replays real records / detects tamper | ✅ *(core-live)* |
 | Health Strip shows the real Doctor + computed summary | ✅ *(core-live)* |
 | Chain status (live 40204 block) | ✅ |
-| Composition Canvas drives live runs | ⏳ (same as 3, the canvas live-run) |
+| Composition Canvas drives live runs | ✅ *(STUDIO-10, core-live — real wasmtime dispatch on clip completion)* |
 | Break-Glass real SecurityOfficer path | 🟡 (the UI + 72h affirmation are real; the live break-glass attestation rides the same `ApprovalQueue` wiring) |
 
 ## Quality bar (already met)
 
 - **Both builds green, zero studio warnings.** Default (fast, modeled core) + `core-live`
-  (real `citrate-agent-core`). 35 default / 39 core-live tests.
+  (real `citrate-agent-core`). 35 default / 40 core-live tests.
 - **Parity-tested seams.** Every pure decision (SoD, quorum shape/count/decision, audit
   integrity) passes the *same* assertions under default and `core-live`.
 - **e2e harness.** Headless gate→sign→resume→done→audit loop, asserted, both builds.
 - **No dead code.** Every `#[allow(dead_code)]` removed or a precise `cfg_attr`; unwraps
   triaged (7 non-test, all provably safe).
-- **Full Agentile trail.** 9 sprints, each with spec → tests → code → retro → journal → essay.
+- **Full Agentile trail.** 13 sprints, each with spec → tests → code → retro → journal → essay.
+- **UI kit extracted** to `citrate-studio-ui-kit`, consumed by Studio + a second shell,
+  pixel-identical *(STUDIO-13)*.
+- **Visual regression gate** — 19 surfaces captured + golden-image diff *(STUDIO-11)*.
 
 ## What remains for `v1.0.0`
 
 | Item | Kind | Gate |
 |---|---|---|
-| Canvas-driven live run (playback → real dispatch → real audit record) | functional | UX decision (real dispatch is async/multi-second vs the smooth demo timeline) + the wiring |
 | Signed `.cps` dispatch (drop the dev opt-in) | upstream | CIT-AGENT-3e packer |
 | L0 first-prompt agent loop | upstream | CIT-AGENT-3 |
-| Signed/notarized installers | ship | Apple + Windows code-signing certs (CI secrets) |
-| External Tier-1 audit attestation | ship | the federation auditor (`AUDIT_TIER.md`) |
+| Signed/notarized installers | ship | Apple + Windows code-signing certs (CI secrets) — **next** |
+| External Tier-1 audit attestation | ship | the federation auditor (`AUDIT_TIER.md`) — **after** |
 
 None of these is unknown or hidden — each is named with what gates it. The codebase is a
 **hardened release candidate**: every capability that can be real in this environment is
