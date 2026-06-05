@@ -26,7 +26,7 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
 | HITL approvals via the real `ApprovalQueue` | ✅ | studio's ed25519 keys → real attestations → verify + RM-G.1 roster + SoD + quorum; the live dock routes through it under `core-live`. *(STUDIO-4, 6)* |
 | Real `CapsuleDispatch` (wasmtime) | ✅ | the `hello` capsule executes; Settings "Run smoke capsule". Real `.cps` *signing* awaits the upstream packer (CIT-AGENT-3e); today's run uses a logged dev opt-in. *(STUDIO-6)* |
 | Real hash-chained `AuditChain` | ✅ | the scrubber's `verify_integrity` + the Doctor run against a real chain. *(STUDIO-3, 6)* |
-| **Canvas drives the live run** (playhead off real dispatch, real `ToolResult` cards) | ⏳ | the playback is a modeled timer; wiring it to real `CapsuleDispatch` + recording each step to the real `AuditChain` is the last live-operation piece. |
+| **Canvas drives the live run** (real dispatch on clip completion, real `ToolResult` badge) | ✅ | *(STUDIO-10)* each completed clip runs a real capsule via wasmtime; the output card shows a "⚡ wasmtime" provenance badge with the real return. The run dispatches the real `hello` smoke (the `recon.*` fleet awaits the upstream packer); heavy-capsule off-thread dispatch is noted. |
 | **Anchoring on chain 40204** | 🔒 | chain *reads* are ✅ (live `rpc.citrate.ai`, id 40204); *writes* need a funded signer + gas (`CITRATE_ANCHOR_KEY` seam present). |
 
 ### 4. Operate day to day
