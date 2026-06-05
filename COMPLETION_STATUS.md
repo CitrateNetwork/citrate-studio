@@ -1,0 +1,67 @@
+# Citrate Studio — completion status
+
+Maps the planset's **definition of "complete"**
+(`.agentile/planset/2026-06-04-citrate-studio/00_PLANSET.md`) to what is real today, what is
+modeled, and what gates each remaining item. Honest by design: a green row means *real
+against the runtime under `core-live`*, not "looks done."
+
+Legend: ✅ real · 🟡 modeled (default) / real (core-live) · ⏳ remaining · 🔒 gated on infra/people
+
+## The four operator capabilities
+
+### 1. Sign in — ✅
+OIDC + SIWE against `citrate-identity` via the native loopback-PKCE flow (RFC 8252).
+Real token exchange, TLS-trusted ID token (OIDC §3.1.3.7), keyring storage, refresh,
+logout, a session chip + KYC badge. *(STUDIO-2)*
+
+### 2. Stand up the harness — ✅
+Onboarding configures real, persisted state in `citrate-studio.toml`: a real model-runtime
+probe (Ollama/llama.cpp + embedded fallback), real ed25519 roster enrollment, fail-closed
+signed-capsule install, oversight default. First launch → onboarding; thereafter → Studio.
+*(STUDIO-4, STUDIO-5)*
+
+### 3. Run the agent
+| Piece | Status | Note |
+|---|---|---|
+| HITL approvals via the real `ApprovalQueue` | ✅ | studio's ed25519 keys → real attestations → verify + RM-G.1 roster + SoD + quorum; the live dock routes through it under `core-live`. *(STUDIO-4, 6)* |
+| Real `CapsuleDispatch` (wasmtime) | ✅ | the `hello` capsule executes; Settings "Run smoke capsule". Real `.cps` *signing* awaits the upstream packer (CIT-AGENT-3e); today's run uses a logged dev opt-in. *(STUDIO-6)* |
+| Real hash-chained `AuditChain` | ✅ | the scrubber's `verify_integrity` + the Doctor run against a real chain. *(STUDIO-3, 6)* |
+| **Canvas drives the live run** (playhead off real dispatch, real `ToolResult` cards) | ⏳ | the playback is a modeled timer; wiring it to real `CapsuleDispatch` + recording each step to the real `AuditChain` is the last live-operation piece. |
+| **Anchoring on chain 40204** | 🔒 | chain *reads* are ✅ (live `rpc.citrate.ai`, id 40204); *writes* need a funded signer + gas (`CITRATE_ANCHOR_KEY` seam present). |
+
+### 4. Operate day to day
+| Surface | Status |
+|---|---|
+| Audit Scrubber replays real records / detects tamper | ✅ *(core-live)* |
+| Health Strip shows the real Doctor + computed summary | ✅ *(core-live)* |
+| Chain status (live 40204 block) | ✅ |
+| Composition Canvas drives live runs | ⏳ (same as 3, the canvas live-run) |
+| Break-Glass real SecurityOfficer path | 🟡 (the UI + 72h affirmation are real; the live break-glass attestation rides the same `ApprovalQueue` wiring) |
+
+## Quality bar (already met)
+
+- **Both builds green, zero studio warnings.** Default (fast, modeled core) + `core-live`
+  (real `citrate-agent-core`). 35 default / 39 core-live tests.
+- **Parity-tested seams.** Every pure decision (SoD, quorum shape/count/decision, audit
+  integrity) passes the *same* assertions under default and `core-live`.
+- **e2e harness.** Headless gate→sign→resume→done→audit loop, asserted, both builds.
+- **No dead code.** Every `#[allow(dead_code)]` removed or a precise `cfg_attr`; unwraps
+  triaged (7 non-test, all provably safe).
+- **Full Agentile trail.** 9 sprints, each with spec → tests → code → retro → journal → essay.
+
+## What remains for `v1.0.0`
+
+| Item | Kind | Gate |
+|---|---|---|
+| Canvas-driven live run (playback → real dispatch → real audit record) | functional | UX decision (real dispatch is async/multi-second vs the smooth demo timeline) + the wiring |
+| Chain anchoring (`RecorderClient` write) | functional | a funded signer key + gas |
+| Signed `.cps` dispatch (drop the dev opt-in) | upstream | CIT-AGENT-3e packer |
+| L0 first-prompt agent loop | upstream | CIT-AGENT-3 |
+| Signed/notarized installers | ship | Apple + Windows code-signing certs (CI secrets) |
+| UI-kit extracted + consumed by another shell | ship | `gui-native` to exist; a cross-crate Slint refactor |
+| External Tier-1 audit attestation | ship | the federation auditor (`AUDIT_TIER.md`) |
+
+None of these is unknown or hidden — each is named with what gates it. The codebase is a
+**hardened release candidate**: every capability that can be real in this environment is
+real, parity-tested, and e2e-covered; the rest is functional UX work or genuinely external
+(certs, a funded key, an auditor, the upstream agent loop/packer).

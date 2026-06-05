@@ -66,3 +66,28 @@ opt-level = 1          # Slint UIs are unbearable at opt-level 0; 1 keeps builds
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = true           # smaller, distribution-ready binaries
+
+# STUDIO-9 — `cargo bundle` packaging metadata. Produces a macOS `.app`, a Linux
+# `.deb`, and a Windows installer skeleton. Code-signing + notarization are CI
+# steps gated on secrets (see .github/workflows/release.yml + RELEASE.md).
+[package.metadata.bundle]
+name = "Citrate Studio"
+identifier = "ai.citrate.studio"
+icon = [
+    "assets/icon/icon_32.png",
+    "assets/icon/icon_64.png",
+    "assets/icon/icon_128.png",
+    "assets/icon/icon_256.png",
+    "assets/icon/icon_512.png",
+    "assets/icon/icon_1024.png",
+]
+category = "Developer Tool"
+short_description = "The native agent-harness interface for the Citrate runtime."
+long_description = """
+Citrate Studio is the native control surface for a compliance-first agent: hash-pinned
+HITL approvals, the quorum lattice, separation-of-duties, frame-accurate audit replay, and
+the doctor/tripwire health model — rendered directly from the citrate-agent-runtime
+primitives.
+"""
+copyright = "Copyright © 2026 Citrate Network. BUSL-1.1."

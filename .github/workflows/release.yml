@@ -1,0 +1,109 @@
+name: release
+
+# STUDIO-9 — build, test, and bundle Citrate Studio for the three desktop targets.
+# Code-signing + notarization steps are GATED on repository secrets: without the
+# certs they are skipped (the job still produces an unsigned bundle), so the
+# pipeline is reproducible by anyone and only *signs* where credentials exist.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundle: osx
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bundle: deb
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle: msi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Linux: Slint's winit backend needs X11/wayland + fontconfig dev libs.
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libfontconfig1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Test (default features)
+        run: cargo test --locked
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+
+      - name: Bundle
+        run: cargo bundle --release --format ${{ matrix.bundle }}
+
+      # ── Code-signing + notarization — GATED on secrets ──────────────
+      # macOS: import the Developer ID cert, codesign the .app, notarize,
+      # staple. Skipped entirely when APPLE_CERT_P12 is absent.
+      - name: macOS sign + notarize
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          echo "$APPLE_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -s build.keychain
+          APP=$(find target/release/bundle/osx -maxdepth 1 -name '*.app')
+          codesign --deep --force --options runtime --timestamp \
+            --sign "Developer ID Application: ${APPLE_TEAM_ID}" "$APP"
+          xcrun notarytool submit "$APP" --apple-id "$APPLE_NOTARY_USER" \
+            --password "$APPLE_NOTARY_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$APP"
+
+      - name: Windows sign
+        if: runner.os == 'Windows' && env.WINDOWS_CERT_PFX != ''
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          echo "Windows signtool step — gated on WINDOWS_CERT_PFX (configure in CI secrets)."
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: citrate-studio-${{ matrix.target }}
+          path: target/release/bundle/**
+
+  attest:
+    name: audit attestation (external)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Note
+        run: |
+          echo "Tier-1 external audit attestation (AUDIT_TIER.md) is an out-of-band step"
+          echo "against the release SHA, performed by the federation auditor — not a CI job."

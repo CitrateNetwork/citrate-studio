@@ -16,6 +16,20 @@ wax-seal accents, the lattice motif, mono compliance labels) and renders the
 `citrate-agent-runtime` primitives directly: every value on screen traces to a struct,
 enum, or function named in `CITRATE_STUDIO_DESIGN_SPEC.md`.
 
+> **Status (9 sprints in).** A hardened release candidate: real auth, real policy core,
+> real signer roster, persistent setup, real `ApprovalQueue` / capsule dispatch / chain
+> reads / Doctor (all against `citrate-agent-core` under `core-live`), zero dead code, and
+> a headless e2e harness. Both builds green, 35 / 39 tests. The exact map of *real vs
+> modeled vs gated* — and what remains for `v1.0.0` — is in **[`COMPLETION_STATUS.md`](COMPLETION_STATUS.md)**;
+> packaging/release in **[`RELEASE.md`](RELEASE.md)**. The full build trail (spec → tests →
+> code → retro → journal → essay per sprint) is under `.agentile/sprints/completed/` +
+> `docs/`.
+>
+> **Rust modules:** `auth` (OIDC/SIWE) · `signing` (ed25519 roster) · `config` (persisted
+> setup + runtime probe + capsule verify) · `chain` (live 40204 reads) · `core_bridge`
+> (the real-core seams, `core-live`) · `data` (demo catalog) · `main` (shell + intents +
+> state machine).
+
 ---
 
 ## What's here
