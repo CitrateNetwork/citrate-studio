@@ -1,0 +1,350 @@
+// =============================================================
+// Citrate Studio — L1 Composition Canvas (the heart)
+// Layer stack on a timeline. Top→bottom = execution order. The
+// playhead sweeps left→right; output cards bloom above each clip as
+// it returns. Reorder edits the run plan (an intent), never the
+// on-disk capsule set.
+// =============================================================
+import { Theme, Settings } from "../theme.slint";
+import { AppIcon, CapGlyph } from "../icons.slint";
+import { RiskDot, Keyframe, IconButton, Palettes } from "../primitives.slint";
+import { Eyebrow, SelectableText } from "../typography.slint";
+import { AppState, ClipData } from "../models.slint";
+
+// density-derived metrics
+global Metrics {
+    out property <length> unit: Settings.density == "compact" ? 12px : 19px;
+    out property <length> lane-h: Settings.density == "compact" ? 74px : 112px;
+    out property <length> clip-h: Settings.density == "compact" ? 30px : 42px;
+    out property <length> clip-top: Settings.density == "compact" ? 40px : 58px;
+    out property <length> ruler-h: 26px;
+    out property <length> gutter: 96px;
+}
+
+component TBtn inherits Rectangle {
+    in property <string> icon;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    width: 34px;
+    height: 34px;
+    border-radius: Theme.r-1;
+    border-width: 1px;
+    border-color: primary ? Theme.citrate-green : (touch.has-hover ? Theme.ink : Theme.border-2);
+    background: primary ? (touch.has-hover ? Theme.citrate-green-deep : Theme.citrate-green) : Theme.paper-pure;
+    opacity: enabled ? 1 : 0.4;
+    animate border-color, background { duration: Theme.dur-fast; }
+    AppIcon {
+        name: root.icon;
+        size: 15px;
+        tint: Theme.ink;
+        x: (parent.width - self.width)/2;
+        y: (parent.height - self.height)/2;
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.clicked(); } }
+}
+
+component RunStatus inherits HorizontalLayout {
+    in property <string> status;
+    property <string> label: status == "running" ? "RUNNING"
+        : status == "paused" ? "PAUSED · AWAITING QUORUM"
+        : status == "done" ? "COMPLETE"
+        : status == "failed" ? "HALTED" : "PLAN";
+    property <color> tone: status == "running" ? Theme.citrate-green-deep
+        : status == "paused" ? Theme.risk-high-deep
+        : status == "done" ? Theme.citrate-green-deep
+        : status == "failed" ? Theme.danger : Theme.fg-3;
+    spacing: 7px;
+    Rectangle {
+        width: 7px; height: 7px; border-radius: 3.5px; background: root.tone;
+        y: (parent.height - self.height)/2;
+    }
+    Text {
+        text: root.label;
+        color: root.tone;
+        font-family: Theme.font-mono;
+        font-size: 10.5px;
+        letter-spacing: 1px;
+        vertical-alignment: center;
+    }
+}
+
+// ---- output card (blooms above the clip on completion) ----
+component OutputCard inherits Rectangle {
+    in property <ClipData> item;
+    property <bool> open: false;
+    width: 230px;
+    // size to content (a bare Rectangle would otherwise fill the lane)
+    height: body.preferred-height;
+    border-radius: Theme.r-2;
+    border-width: 1px;
+    border-color: Theme.border-2;
+    background: Theme.paper-pure;
+    drop-shadow-color: Theme.shadow-soft;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    body := VerticalLayout {
+        padding: 10px;
+        spacing: 5px;
+        HorizontalLayout {
+            spacing: 7px;
+            AppIcon { name: "check"; size: 13px; stroke-weight: 2; tint: Theme.citrate-green-deep; y: (parent.height - self.height)/2; }
+            Eyebrow { text: "TOOLRESULT"; color: Theme.fg-3; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            IconButton { icon: root.open ? "chevup" : "chevdown"; size: 18px; icon-size: 12px; tint: Theme.fg-3; clicked => { root.open = !root.open; } }
+        }
+        // output clamped to ~2 lines when collapsed (matches the web kit)
+        Rectangle {
+            clip: true;
+            height: root.open ? otext.preferred-height : min(otext.preferred-height, 34px);
+            otext := SelectableText {
+                x: 0; y: 0;
+                text: root.item.output;
+                wrap: word-wrap;
+                single-line: false;
+                font-size: 12.5px;
+                color: Theme.fg-1;
+                width: 100%;
+            }
+        }
+        if root.open: Rectangle { height: 1px; background: Theme.stone-200; }
+        if root.open: SelectableText {
+            text: root.item.data-json;
+            wrap: word-wrap;
+            single-line: false;
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: Theme.fg-2;
+            width: 100%;
+        }
+    }
+}
+
+// ---- one clip on the timeline ----
+component ClipView inherits Rectangle {
+    in property <ClipData> item;
+    property <bool> done: AppState.playhead >= item.start + item.dur;
+    property <bool> firing: AppState.status == "running" && AppState.playhead >= item.start && AppState.playhead < item.start + item.dur;
+    property <bool> wait: AppState.pending-gate-id == item.id;
+    property <bool> selected: AppState.selected-id == item.id;
+    property <float> progress: item.dur > 0 ? Math.clamp((AppState.playhead - item.start) / item.dur, 0, 1) : 0;
+
+    border-radius: Theme.r-1;
+    clip: true;
+    opacity: item.dimmed ? 0.4 : 1.0;
+    border-width: (selected || firing || wait) ? 2px : 1px;
+    border-color: wait ? Theme.risk-high
+        : firing ? Theme.citrate-green
+        : selected ? Theme.ink
+        : done ? Theme.border-1 : Theme.border-2;
+    background: Theme.paper-pure;
+    drop-shadow-color: firing ? Theme.citrate-green.with-alpha(0.5)
+        : (touch.has-hover ? Theme.shadow-soft : #00000014);
+    drop-shadow-blur: firing ? 24px : (touch.has-hover ? 16px : 2px);
+    drop-shadow-offset-y: firing ? 8px : 1px;
+    animate border-color { duration: Theme.dur-fast; }
+
+    HorizontalLayout {
+        Rectangle { width: 5px; background: Palettes.risk-base(root.item.risk); }
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 5px;
+            padding-bottom: 5px;
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: start;
+                Text { text: root.item.name; font-family: Theme.font-mono; font-size: 12px; font-weight: 500; color: Theme.ink; }
+                Text { text: root.item.version; font-family: Theme.font-mono; font-size: 12px; color: Theme.fg-3; }
+            }
+            if root.height > 34px: HorizontalLayout {
+                spacing: 5px;
+                alignment: start;
+                for c in root.item.caps: CapGlyph { cap: c; size: 14px; tint: c == "write" ? Theme.danger : Theme.fg-2; }
+            }
+        }
+    }
+    if root.item.gate == "medium" || root.item.gate == "high" || root.item.gate == "critical": Keyframe {
+        tier: root.item.gate;
+        outlined: Settings.keyframe-style == "outlined";
+        x: parent.width - self.width - 8px;
+        y: (parent.height - self.height)/2;
+    }
+    if root.firing || root.done: Rectangle {
+        x: 0; y: parent.height - 2px;
+        height: 2px;
+        width: parent.width * (root.done ? 1.0 : root.progress);
+        background: Theme.citrate-green;
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { AppState.select-clip(root.item.id); } }
+}
+
+// ---- lane gutter controls (fixed left column) ----
+component LaneControls inherits Rectangle {
+    in property <ClipData> item;
+    in property <int> idx;
+    property <bool> dry: item.dimmed;
+    Rectangle {
+        x: 8px;
+        y: 8px;
+        height: 22px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: Theme.border-1;
+        background: Theme.paper;
+        HorizontalLayout {
+            padding-left: 5px; padding-right: 5px; spacing: 4px;
+            Text {
+                text: root.idx < 9 ? "0" + (root.idx + 1) : (root.idx + 1);
+                font-family: Theme.font-mono; font-size: 9px; letter-spacing: 0.5px;
+                color: Theme.stone-400; vertical-alignment: center;
+            }
+            IconButton { icon: root.dry ? "eyeoff" : "eye"; size: 18px; icon-size: 12px; tint: root.dry ? Theme.stone-400 : Theme.fg-2; clicked => { AppState.toggle-dry(root.item.id); } }
+            IconButton { icon: "solo"; size: 18px; icon-size: 11px; tint: Theme.fg-3; clicked => { AppState.toggle-solo(root.item.id); } }
+        }
+    }
+}
+
+export component CompositionCanvas inherits Rectangle {
+    background: Theme.paper;
+    property <length> tracks-w: AppState.units-total * Metrics.unit;
+    property <length> content-h: AppState.clips.length * Metrics.lane-h + Metrics.ruler-h;
+
+    VerticalLayout {
+        // head
+        Rectangle {
+            background: Theme.paper;
+            height: 60px;
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 14px;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: AppState.run-title;
+                        font-family: Theme.font-display;
+                        font-size: 21px;
+                        font-weight: 500;
+                        letter-spacing: -0.35px;
+                        color: Theme.ink;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Eyebrow { text: AppState.run-id; vertical-alignment: center; }
+                        Text { text: "·"; color: Theme.stone-300; vertical-alignment: center; }
+                        Text { text: AppState.run-sub; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; vertical-alignment: center; }
+                    }
+                }
+                RunStatus { status: AppState.status; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    TBtn { icon: "rewind"; clicked => { AppState.rewind(); } }
+                    TBtn { icon: "stepback"; clicked => { AppState.step-back(); } }
+                    TBtn {
+                        icon: AppState.status == "running" ? "pause" : "play";
+                        primary: true;
+                        enabled: !(AppState.status == "paused" || AppState.status == "done");
+                        clicked => { if (AppState.status == "running") { AppState.pause(); } else { AppState.play(); } }
+                    }
+                    TBtn { icon: "step"; clicked => { AppState.step(); } }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border-1; }
+
+        // timeline body: fixed gutter + horizontal flickable tracks
+        HorizontalLayout {
+            Rectangle {
+                width: Metrics.gutter;
+                background: Theme.paper;
+                for clip[i] in AppState.clips: LaneControls {
+                    item: clip;
+                    idx: i;
+                    x: 0;
+                    y: Metrics.ruler-h + i * Metrics.lane-h;
+                    width: 100%;
+                    height: Metrics.lane-h;
+                }
+            }
+            Flickable {
+                viewport-width: root.tracks-w;
+                viewport-height: max(root.content-h, self.height);
+
+                Rectangle {
+                    x: 0; y: 0; width: root.tracks-w; height: Metrics.ruler-h;
+                    background: Theme.paper-2;
+                    for k in 15: Text {
+                        text: (k * 4) + "s";
+                        x: k * 4 * Metrics.unit + 4px;
+                        y: 0;
+                        height: Metrics.ruler-h;
+                        font-family: Theme.font-mono;
+                        font-size: 8.5px;
+                        color: Theme.fg-3;
+                        vertical-alignment: bottom;
+                    }
+                }
+                Rectangle { x: 0; y: Metrics.ruler-h - 1px; width: root.tracks-w; height: 1px; background: Theme.border-1; }
+
+                for clip[i] in AppState.clips: Rectangle {
+                    x: 0;
+                    y: Metrics.ruler-h + i * Metrics.lane-h;
+                    width: root.tracks-w;
+                    height: Metrics.lane-h;
+                    Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.stone-150; }
+                    // clip first, then the output card blooms over it (z-order matches the web kit)
+                    ClipView {
+                        item: clip;
+                        x: clip.start * Metrics.unit;
+                        y: Metrics.clip-top;
+                        width: clip.dur * Metrics.unit;
+                        height: Metrics.clip-h;
+                    }
+                    if AppState.playhead >= clip.start + clip.dur: OutputCard {
+                        item: clip;
+                        x: clip.start * Metrics.unit + 2px;
+                        y: 2px;
+                    }
+                    if AppState.trip-fired && clip.id == "c3": HorizontalLayout {
+                        x: (clip.start + clip.dur) * Metrics.unit + 10px;
+                        y: Metrics.clip-top + 4px;
+                        width: 120px;
+                        height: 18px;
+                        spacing: 5px;
+                        Rectangle {
+                            width: 18px; height: 18px; border-radius: 5px;
+                            background: Theme.risk-high.with-alpha(0.28);
+                            border-width: 1px; border-color: Theme.risk-high;
+                            AppIcon { name: "alert"; size: 10px; tint: #ffd479; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                        }
+                        Text { text: "TRIP-AU-002"; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.risk-high-deep; vertical-alignment: center; }
+                    }
+                }
+
+                // playhead
+                Rectangle {
+                    x: AppState.playhead * Metrics.unit;
+                    y: 0;
+                    width: 2px;
+                    height: max(root.content-h, parent.height);
+                    background: AppState.status == "paused" ? Theme.risk-high : Theme.citrate-green;
+                    drop-shadow-color: (AppState.status == "paused" ? Theme.risk-high : Theme.citrate-green).with-alpha(0.5);
+                    drop-shadow-blur: 10px;
+                    animate x { duration: AppState.status == "running" ? 90ms : Theme.dur-base; }
+                    Path {
+                        x: -6px; y: 0; width: 14px; height: 11px;
+                        commands: "M0 0 L14 0 L7 11 Z";
+                        viewbox-width: 14; viewbox-height: 11;
+                        fill: AppState.status == "paused" ? Theme.risk-high : Theme.citrate-green;
+                    }
+                }
+            }
+        }
+    }
+}

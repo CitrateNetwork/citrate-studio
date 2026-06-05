@@ -1,0 +1,9 @@
+# cargo-audit configuration — citrate-studio
+# Per the federation SOP, every dependency advisory must either be
+# (a) closed by a dep bump/removal, or (b) ignored here with a
+# documented tracker + reason. Empty today: the dependency surface is
+# Slint + png only. Revisit when the auth client (reqwest/jsonwebtoken/
+# keyring) and agent-core (cdylib) deps land.
+
+[advisories]
+ignore = []

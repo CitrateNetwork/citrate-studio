@@ -1,0 +1,377 @@
+// =============================================================
+// Citrate Studio — Settings + RBAC
+// Org → teams → individuals. A team admin can add or drop members
+// from the team roster; a dropped member keeps full rights over
+// their own personal workspace. Roster, grants, runtime, policy.
+// =============================================================
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { AppIcon } from "../icons.slint";
+import { RiskBadge, RoleGlyph, Btn, IconButton, Palettes } from "../primitives.slint";
+import { Eyebrow, SelectableText, Title } from "../typography.slint";
+import { AppState, Member, Signer } from "../models.slint";
+
+component Avatar inherits Rectangle {
+    in property <string> name;
+    in property <string> role;
+    property <bool> danger: role == "SecurityOfficer";
+    width: 30px; height: 30px; border-radius: 15px;
+    background: danger ? Theme.danger-bg : Theme.stone-100;
+    border-width: 1px; border-color: danger ? Theme.danger : Theme.border-1;
+    Text {
+        text: Palettes.role-abbr(root.role);
+        font-family: Theme.font-mono;
+        font-weight: 600; font-size: 11px;
+        color: root.danger ? Theme.danger : Theme.fg-1;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+}
+
+component Row inherits HorizontalLayout {
+    in property <string> k;
+    in property <string> v;
+    in property <bool> mono: false;
+    in property <bool> danger: false;
+    spacing: 14px;
+    padding-top: 9px; padding-bottom: 9px;
+    Text { text: root.k; font-size: 13px; color: Theme.fg-2; vertical-alignment: center; }
+    Rectangle { horizontal-stretch: 1; }
+    SelectableText { text: root.v; font-family: root.mono ? Theme.font-mono : Theme.font-sans; font-size: 12.5px; color: root.danger ? Theme.danger : Theme.fg-1; horizontal-alignment: right; }
+}
+
+component NavItem inherits Rectangle {
+    in property <string> id;
+    in property <string> label;
+    in property <string> icon;
+    property <bool> on: AppState.settings-section == id;
+    height: 36px;
+    border-radius: Theme.r-1;
+    background: on ? Theme.ink : (touch.has-hover ? Theme.stone-100 : transparent);
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; spacing: 10px;
+        AppIcon { name: root.icon; size: 15px; tint: root.on ? Theme.paper : Theme.fg-1; y: (parent.height - self.height)/2; }
+        Text { text: root.label; font-size: 13px; font-weight: root.on ? 500 : 400; color: root.on ? Theme.paper : Theme.fg-1; vertical-alignment: center; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { AppState.settings-section = root.id; } }
+}
+
+component RBACSection inherits VerticalLayout {
+    spacing: 0;
+    // org → team breadcrumb
+    HorizontalLayout {
+        spacing: 8px; alignment: start;
+        padding-bottom: 16px;
+        AppIcon { name: "building"; size: 13px; tint: Theme.fg-3; y: (parent.height - self.height)/2; }
+        Text { text: "Boeing › "; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; vertical-alignment: center; }
+        Text { text: "Procurement #14"; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-1; vertical-alignment: center; }
+        Text { text: " · US-FED"; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; vertical-alignment: center; }
+    }
+    // team card
+    Rectangle {
+        border-width: 1px; border-color: Theme.border-1; border-radius: Theme.r-2;
+        clip: true;
+        height: team.preferred-height;
+        team := VerticalLayout {
+            Rectangle {
+                height: 50px; background: Theme.paper-2;
+                Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
+                HorizontalLayout {
+                    padding-left: 16px; padding-right: 16px; spacing: 10px;
+                    AppIcon { name: "users"; size: 16px; tint: Theme.fg-1; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        alignment: center; spacing: 1px; horizontal-stretch: 1;
+                        Text { text: "Procurement #14 · team roster"; font-weight: 600; font-size: 14px; color: Theme.ink; }
+                        Text { text: AppState.rbac-members.length + " members · RBAC managed by team admins"; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+                    }
+                    Btn { text: "Add member"; icon: "plus"; kind: "ghost"; sm: true; clicked => { AppState.rbac-adding = !AppState.rbac-adding; } }
+                }
+            }
+            // add-member tray
+            if AppState.rbac-adding: Rectangle {
+                background: Theme.citrate-green-tint;
+                height: tray.preferred-height;
+                Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
+                tray := VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+                    Eyebrow { text: "FROM ORG DIRECTORY"; }
+                    if AppState.rbac-addable.length == 0: Text { text: "Everyone in the directory is already on this team."; font-family: Theme.font-mono; font-size: 12px; color: Theme.fg-3; }
+                    for p in AppState.rbac-addable: Rectangle {
+                        height: 38px;
+                        border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.border-2; background: Theme.paper-pure;
+                        horizontal-stretch: 0;
+                        HorizontalLayout {
+                            padding-left: 8px; padding-right: 12px; spacing: 7px;
+                            Avatar { name: p.name; role: p.role; y: (parent.height - self.height)/2; }
+                            Text { text: p.name; font-size: 12px; color: Theme.ink; vertical-alignment: center; }
+                            AppIcon { name: "plus"; size: 12px; tint: Theme.fg-2; y: (parent.height - self.height)/2; }
+                        }
+                        TouchArea { mouse-cursor: pointer; clicked => { AppState.rbac-add(p.id); } }
+                    }
+                }
+            }
+            // members
+            for m in AppState.rbac-members: Rectangle {
+                height: 56px;
+                Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
+                HorizontalLayout {
+                    padding-left: 16px; padding-right: 16px; spacing: 12px;
+                    Avatar { name: m.name; role: m.role; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        alignment: center; spacing: 1px; horizontal-stretch: 1;
+                        HorizontalLayout {
+                            spacing: 6px; alignment: start;
+                            Text { text: m.name; font-size: 13.5px; font-weight: 500; color: Theme.ink; }
+                            if m.team-role == "Admin": Rectangle {
+                                border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.citrate-green-deep; y: (parent.height - self.height)/2;
+                                HorizontalLayout { padding-left: 6px; padding-right: 6px; padding-top: 1px; padding-bottom: 1px;
+                                    Text { text: "ADMIN"; font-family: Theme.font-mono; font-size: 8px; letter-spacing: 0.6px; color: Theme.citrate-green-dark; }
+                                }
+                            }
+                        }
+                        Text { text: m.title; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+                    }
+                    Rectangle {
+                        border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.border-2; background: Theme.paper-2; y: (parent.height - self.height)/2;
+                        HorizontalLayout { padding-left: 8px; padding-right: 8px; padding-top: 2px; padding-bottom: 2px;
+                            Text { text: m.role; font-family: Theme.font-mono; font-size: 9.5px; font-weight: 500; color: Theme.fg-2; vertical-alignment: center; }
+                        }
+                    }
+                    if m.team-role == "Admin": Text { text: "you"; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; width: 56px; horizontal-alignment: right; vertical-alignment: center; }
+                    if m.team-role != "Admin": Btn { text: "Drop"; kind: "ghost"; sm: true; clicked => { AppState.rbac-drop(m.id); } }
+                }
+            }
+        }
+    }
+    // the guarantee
+    Rectangle { height: 14px; }
+    Rectangle {
+        border-radius: Theme.r-2; border-width: 1px; border-color: Theme.info; background: Theme.info-bg;
+        height: guar.preferred-height;
+        guar := HorizontalLayout {
+            padding: 14px; spacing: 11px;
+            AppIcon { name: "shield"; size: 16px; tint: Theme.info; y: 2px; }
+            SelectableText {
+                text: "Dropping a member revokes only their team grants. They keep full rights over their own personal workspace — its capsules, audit trail, and signer identity are theirs." + (AppState.rbac-dropped.length > 0 ? "\nRecently dropped: " + join-dropped(AppState.rbac-dropped) + " — personal workspace retained." : "");
+                wrap: word-wrap; single-line: false; font-size: 12.5px; color: Theme.info; horizontal-stretch: 1;
+            }
+        }
+    }
+    function join-dropped(d: [string]) -> string {
+        d.length == 0 ? "" : d.length == 1 ? d[0] : d.length == 2 ? d[0] + ", " + d[1] : d[0] + ", " + d[1] + ", " + d[2]
+    }
+    // personal workspace
+    Rectangle { height: 18px; }
+    Eyebrow { text: "YOUR PERSONAL WORKSPACE"; }
+    Rectangle { height: 10px; }
+    Rectangle {
+        height: 56px;
+        border-radius: Theme.r-2; border-width: 1px; border-color: Theme.border-1;
+        HorizontalLayout {
+            padding-left: 16px; padding-right: 16px; spacing: 12px;
+            Rectangle { width: 30px; height: 30px; border-radius: 15px; background: Theme.citrate-green; y: (parent.height - self.height)/2;
+                Text { text: "AR"; font-size: 11px; font-weight: 600; color: Theme.ink; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            VerticalLayout {
+                alignment: center; spacing: 1px; horizontal-stretch: 1;
+                Text { text: "aleia · personal"; font-size: 13.5px; font-weight: 500; color: Theme.ink; }
+                Text { text: "Owner · all rights · independent of any team"; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+            }
+            RiskBadge { tier: "low"; y: (parent.height - self.height)/2; }
+        }
+    }
+}
+
+component RosterSection inherits VerticalLayout {
+    spacing: 0;
+    SelectableText {
+        text: "Enrolled pubkeys per role. With no roster configured, High/Critical actions fail closed — nothing can be approved. Separation-of-duties (CO ⊥ SO, Auditor read-only, no self-approval) is enforced by the core.";
+        wrap: word-wrap; single-line: false; font-size: 13px; color: Theme.fg-2; width: 600px;
+    }
+    Rectangle { height: 14px; }
+    Rectangle {
+        border-width: 1px; border-color: Theme.border-1; border-radius: Theme.r-2; clip: true;
+        height: list.preferred-height;
+        list := VerticalLayout {
+            for s in AppState.signers: Rectangle {
+                height: 52px;
+                Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
+                HorizontalLayout {
+                    padding-left: 15px; padding-right: 15px; spacing: 12px;
+                    RoleGlyph { role: s.role; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        alignment: center; spacing: 1px; horizontal-stretch: 1;
+                        Text { text: s.role; font-size: 13px; font-weight: 500; color: Theme.ink; }
+                        Text { text: s.name; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+                    }
+                    SelectableText { text: s.fp; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; }
+                    if s.readonly: Rectangle {
+                        border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.border-2; background: Theme.paper-2; y: (parent.height - self.height)/2;
+                        HorizontalLayout { padding-left: 8px; padding-right: 8px; padding-top: 2px; padding-bottom: 2px;
+                            Text { text: "read-only"; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.fg-3; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component GrantsSection inherits VerticalLayout {
+    spacing: 0;
+    SelectableText { text: "Registration-time snapshot vs. the live grant. Any widening toward more permission is flagged (AGT-14 drift detector)."; wrap: word-wrap; single-line: false; font-size: 13px; color: Theme.fg-2; width: 600px; }
+    Rectangle { height: 14px; }
+    HorizontalLayout {
+        spacing: 14px;
+        for col[i] in [{k: "snapshot", sub: "at registration"}, {k: "live", sub: "now"}]: Rectangle {
+            horizontal-stretch: 1;
+            border-width: 1px; border-color: i == 1 ? Theme.risk-high : Theme.border-1; border-radius: Theme.r-2;
+            height: gb.preferred-height;
+            gb := VerticalLayout {
+                padding: 16px; spacing: 0;
+                Eyebrow { text: col.k + " · " + col.sub; }
+                Rectangle { height: 8px; }
+                Row { k: "allowed_tools"; v: i == 1 ? "file_read, file_write, send_tx" : "file_read, file_write"; mono: true; danger: i == 1; }
+                Row { k: "max_value_per_tx"; v: "2.5 SALT"; mono: true; }
+                Row { k: "policy"; v: i == 1 ? "Operator" : "Guided"; mono: true; danger: i == 1; }
+                Row { k: "expires_at"; v: "2026-07-01"; mono: true; }
+            }
+        }
+    }
+    Rectangle { height: 12px; }
+    Rectangle {
+        border-radius: Theme.r-1; border-width: 1px; border-color: Theme.risk-high; background: Theme.risk-high-tint;
+        height: 44px;
+        HorizontalLayout {
+            padding-left: 14px; padding-right: 14px; spacing: 9px;
+            AppIcon { name: "alert"; size: 15px; tint: Theme.risk-high-deep; y: (parent.height - self.height)/2; }
+            SelectableText { text: "Drift detected: send_tx added and policy widened Guided → Operator since registration. Re-attest or revoke."; wrap: word-wrap; single-line: false; font-size: 12.5px; color: Theme.risk-high-deep; vertical-alignment: center; horizontal-stretch: 1; }
+        }
+    }
+}
+
+component AccountSection inherits VerticalLayout {
+    spacing: 0;
+    width: 520px;
+    Row { k: "Member"; v: "Aleia Rouhani"; }
+    Row { k: "Email"; v: "aleia.rouhani@boeing.com"; mono: true; }
+    Row { k: "Signer identity"; v: "signer_id f1a2…90de"; mono: true; }
+    Row { k: "Signing surface"; v: "Slint (native) · attested hardware"; }
+    Row { k: "Default role"; v: "ComplianceOfficer"; }
+    Rectangle { height: 10px; }
+    HorizontalLayout {
+        spacing: 10px; alignment: start;
+        Btn { text: "Rotate key"; icon: "key"; kind: "ghost"; sm: true; }
+        Btn { text: "Sign out"; icon: "logout"; kind: "danger"; sm: true; }
+    }
+}
+
+component RuntimeSection inherits VerticalLayout {
+    spacing: 8px;
+    SelectableText { text: "Model runtimes discovered on this instance. Every model is SHA-256 verified before binding."; wrap: word-wrap; single-line: false; font-size: 13px; color: Theme.fg-2; width: 560px; }
+    for r[i] in [{n: "Ollama", p: ":11434", on: true}, {n: "llama.cpp", p: ":8080", on: false}, {n: "Embedded Gemma", p: "GGUF · local", on: false}]: Rectangle {
+        height: 52px;
+        border-radius: Theme.r-2; border-width: 1px; border-color: r.on ? Theme.citrate-green-deep : Theme.border-1;
+        HorizontalLayout {
+            padding-left: 16px; padding-right: 16px; spacing: 12px;
+            AppIcon { name: "spark"; size: 16px; tint: Theme.fg-1; y: (parent.height - self.height)/2; }
+            VerticalLayout {
+                alignment: center; spacing: 1px; horizontal-stretch: 1;
+                Text { text: r.n; font-size: 13.5px; font-weight: 500; color: Theme.ink; }
+                Text { text: r.p; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+            }
+            if r.on: RiskBadge { tier: "low"; y: (parent.height - self.height)/2; }
+            if !r.on: Btn { text: "Connect"; kind: "ghost"; sm: true; }
+        }
+    }
+    Text { text: "Model resolver · CIT-AGENT-3 · planned"; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; }
+}
+
+component PolicySection inherits VerticalLayout {
+    spacing: 0;
+    width: 560px;
+    Row { k: "Policy bundle hash"; v: "sha256:e3b0…c442"; mono: true; }
+    Row { k: "Anchoring strategy"; v: "NightlyMerkle"; }
+    Row { k: "Chain"; v: "40204 · on-prem"; mono: true; }
+    Row { k: "Audit retention"; v: "90 days · mtime 6d"; }
+    Row { k: "Break-glass window"; v: "72h affirmation"; }
+    Row { k: "Tripwires"; v: "9 active · FedRAMP"; }
+    Rectangle { height: 14px; }
+    HorizontalLayout {
+        spacing: 10px; alignment: start;
+        Btn { text: "Export policy"; icon: "download"; kind: "ghost"; sm: true; }
+        Btn { text: "Run doctor"; icon: "shield"; kind: "ghost"; sm: true; }
+    }
+}
+
+export component SettingsOverlay inherits Rectangle {
+    background: #0c221688;
+    TouchArea { clicked => { AppState.settings-open = false; } }
+    property <string> sec-label:
+          AppState.settings-section == "account" ? "Account"
+        : AppState.settings-section == "rbac" ? "Members & teams"
+        : AppState.settings-section == "roster" ? "Signer roster"
+        : AppState.settings-section == "grants" ? "Capability grants"
+        : AppState.settings-section == "runtime" ? "Runtime & models"
+        : "Policy & anchoring";
+    Rectangle {
+        width: min(1020px, parent.width * 0.92);
+        height: min(660px, parent.height * 0.86);
+        x: (parent.width - self.width)/2;
+        y: (parent.height - self.height)/2;
+        background: Theme.paper-pure;
+        border-radius: Theme.r-3;
+        clip: true;
+        drop-shadow-color: Theme.shadow-soft; drop-shadow-blur: 40px;
+        TouchArea { }
+        HorizontalLayout {
+            spacing: 0;
+            // nav
+            Rectangle {
+                width: 230px;
+                background: Theme.paper-2;
+                Rectangle { x: parent.width - 1px; y: 0; width: 1px; height: 100%; background: Theme.border-1; }
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 2px;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 8px; alignment: start; padding-bottom: 14px; padding-left: 8px;
+                        AppIcon { name: "settings"; size: 16px; tint: Theme.fg-1; y: (parent.height - self.height)/2; }
+                        Eyebrow { text: "SETTINGS"; color: Theme.fg-1; vertical-alignment: center; }
+                    }
+                    NavItem { id: "account"; label: "Account"; icon: "user"; }
+                    NavItem { id: "rbac"; label: "Members & teams"; icon: "users"; }
+                    NavItem { id: "roster"; label: "Signer roster"; icon: "key"; }
+                    NavItem { id: "grants"; label: "Capability grants"; icon: "shield"; }
+                    NavItem { id: "runtime"; label: "Runtime & models"; icon: "spark"; }
+                    NavItem { id: "policy"; label: "Policy & anchoring"; icon: "sliders"; }
+                }
+            }
+            // main
+            VerticalLayout {
+                Rectangle {
+                    height: 56px;
+                    Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
+                    HorizontalLayout {
+                        padding-left: 24px; padding-right: 24px;
+                        Title { text: root.sec-label; font-size: 20px; horizontal-stretch: 1; }
+                        IconButton { icon: "x"; clicked => { AppState.settings-open = false; } }
+                    }
+                }
+                ScrollView {
+                    VerticalLayout {
+                        padding: 24px;
+                        alignment: start;
+                        if AppState.settings-section == "rbac": RBACSection { }
+                        if AppState.settings-section == "account": AccountSection { }
+                        if AppState.settings-section == "roster": RosterSection { }
+                        if AppState.settings-section == "grants": GrantsSection { }
+                        if AppState.settings-section == "runtime": RuntimeSection { }
+                        if AppState.settings-section == "policy": PolicySection { }
+                    }
+                }
+            }
+        }
+    }
+}

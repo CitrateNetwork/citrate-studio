@@ -1,0 +1,148 @@
+// =============================================================
+// Citrate Studio — conversational first-run onboarding
+// The agent walks you through setup on the left; a live checklist
+// fills in on the right. By the last step you have already prompted
+// the agent successfully — confidence earned.
+// =============================================================
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { AppIcon } from "../icons.slint";
+import { Btn, IconButton } from "../primitives.slint";
+import { Eyebrow, Title, SelectableText } from "../typography.slint";
+import { ChatPanel } from "chat.slint";
+import { AppState, OnboardStep } from "../models.slint";
+
+component StepRow inherits Rectangle {
+    in property <OnboardStep> s;
+    in property <int> idx;
+    height: 56px;
+    border-radius: Theme.r-2;
+    border-width: 1px;
+    border-color: s.done ? Theme.citrate-green-deep : (s.active ? Theme.ink : Theme.border-1);
+    background: s.done ? Theme.citrate-green-tint : Theme.paper-pure;
+    opacity: (s.done || s.active) ? 1.0 : 0.55;
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 14px; spacing: 13px;
+        Rectangle {
+            width: 30px; height: 30px; border-radius: Theme.r-1;
+            background: root.s.done ? Theme.citrate-green : Theme.paper-2;
+            border-width: 1px; border-color: root.s.done ? Theme.citrate-green : Theme.border-1;
+            y: (parent.height - self.height)/2;
+            AppIcon { name: root.s.done ? "check" : root.s.icon; size: 15px; stroke-weight: root.s.done ? 2.2 : 1.5; tint: root.s.done ? Theme.ink : Theme.fg-3; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+        }
+        VerticalLayout {
+            alignment: center; spacing: 1px; horizontal-stretch: 1;
+            Text { text: "STEP " + (root.idx + 1); font-family: Theme.font-mono; font-size: 10px; letter-spacing: 1px; color: Theme.fg-3; }
+            Text { text: root.s.label; font-size: 14px; font-weight: 500; color: Theme.ink; }
+        }
+        if root.s.done: SelectableText { text: root.s.value; font-family: Theme.font-mono; font-size: 11px; color: Theme.citrate-green-dark; horizontal-alignment: right; }
+        if !root.s.done && root.s.active: Text { text: "in progress"; font-family: Theme.font-mono; font-size: 10px; color: Theme.fg-3; vertical-alignment: center; }
+    }
+}
+
+export component Onboarding inherits Rectangle {
+    background: Theme.paper;
+    HorizontalLayout {
+        spacing: 0;
+        // ---- left: chat ----
+        Rectangle {
+            width: parent.width * 0.52;
+            Rectangle { x: parent.width - 1px; y: 0; width: 1px; height: 100%; background: Theme.border-1; }
+            VerticalLayout {
+                Rectangle {
+                    height: 54px;
+                    background: Theme.sealed-bg-2;
+                    HorizontalLayout {
+                        padding-left: 18px; padding-right: 18px; spacing: 10px;
+                        Image { source: @image-url("../../assets/brand/citrate_mark_green.svg"); width: 22px; height: 22px; y: (parent.height - 22px)/2; }
+                        Text { text: "Citrate"; font-family: Theme.font-display; font-weight: 600; font-size: 15px; color: #ffffff; vertical-alignment: center; }
+                        Rectangle {
+                            border-radius: Theme.r-pill; border-width: 1px; border-color: Theme.sealed-border-2; y: (parent.height - self.height)/2;
+                            HorizontalLayout { padding-left: 7px; padding-right: 7px; padding-top: 2px; padding-bottom: 2px;
+                                Text { text: "SETUP"; font-family: Theme.font-mono; font-size: 9px; letter-spacing: 1.6px; color: Theme.citrate-green; vertical-alignment: center; }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle {
+                            y: (parent.height - self.height)/2; horizontal-stretch: 0;
+                            HorizontalLayout { padding: 4px;
+                                Text { text: "SKIP →"; font-family: Theme.font-mono; font-size: 10.5px; letter-spacing: 0.8px; color: Theme.sealed-fg-2; vertical-alignment: center; }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { AppState.enter-studio(); } }
+                        }
+                    }
+                }
+                ChatPanel {
+                    messages: AppState.onboard-messages;
+                    quick: AppState.onboard-quick;
+                    busy: false;
+                    placeholder: "Answer, or just tell me what you want…";
+                    send(t) => { AppState.onboard-send(t); }
+                    chip(c) => { AppState.onboard-chip(c); }
+                }
+            }
+        }
+        // ---- right: checklist ----
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.paper-2;
+            VerticalLayout {
+                Rectangle {
+                    height: 96px;
+                    Rectangle { x: 0; y: parent.height - 1px; width: 100%; height: 1px; background: Theme.border-1; }
+                    VerticalLayout {
+                        padding-left: 26px; padding-right: 26px; padding-top: 20px;
+                        spacing: 8px;
+                        Eyebrow { text: "FIRST-RUN SETUP"; }
+                        Title { text: "Standing up your harness"; font-size: 24px; }
+                        Rectangle {
+                            height: 6px; border-radius: 3px; background: Theme.stone-150; clip: true;
+                            Rectangle { x: 0; y: 0; height: 100%; width: parent.width * (AppState.onboard-progress / 100); background: Theme.citrate-green;
+                                animate width { duration: Theme.dur-base; }
+                            }
+                        }
+                    }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 16px;
+                        padding-left: 26px; padding-right: 26px;
+                        spacing: 8px;
+                        alignment: start;
+                        for s[i] in AppState.onboard-steps: StepRow { s: s; idx: i; }
+                        if AppState.onboard-team: Rectangle {
+                            border-radius: Theme.r-1; border-width: 1px; border-color: Theme.info; background: Theme.info-bg;
+                            height: note.preferred-height;
+                            note := HorizontalLayout {
+                                padding: 11px;
+                                SelectableText {
+                                    text: "Team RBAC: admins can add or drop members from this team's roster at any time — and a dropped member keeps full rights over their own personal workspace.";
+                                    wrap: word-wrap; single-line: false; font-size: 12px; color: Theme.info; horizontal-stretch: 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 78px;
+                    Rectangle { x: 0; y: 0; width: 100%; height: 1px; background: Theme.border-1; }
+                    Rectangle {
+                        x: 26px; width: parent.width - 52px;
+                        height: 46px; y: (parent.height - 46px)/2;
+                        border-radius: Theme.r-1;
+                        background: AppState.onboard-ready ? Theme.citrate-green : Theme.stone-200;
+                        opacity: AppState.onboard-ready ? 1.0 : 0.6;
+                        Text {
+                            text: AppState.onboard-ready ? "Enter your Studio →" : "Finish setup to continue";
+                            font-weight: 500; font-size: 13.5px;
+                            color: AppState.onboard-ready ? Theme.ink : Theme.fg-2;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        TouchArea { mouse-cursor: AppState.onboard-ready ? pointer : default; clicked => { if (AppState.onboard-ready) { AppState.enter-studio(); } } }
+                    }
+                }
+            }
+        }
+    }
+}

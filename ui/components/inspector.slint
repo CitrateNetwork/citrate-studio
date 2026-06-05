@@ -1,0 +1,201 @@
+// =============================================================
+// Citrate Studio — L2 Inspector
+// Click a layer → the capsule's declared facts (Manifest), in the
+// AE twirl-down idiom. Each twirl is one step closer to code; the
+// deepest links to L4. Slides in over the canvas.
+// =============================================================
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { AppIcon, CapGlyph } from "../icons.slint";
+import { RiskBadge, RiskDot, DataChip, RoleGlyph, Btn, IconButton, Palettes } from "../primitives.slint";
+import { Eyebrow, SelectableText, Label } from "../typography.slint";
+import { AppState, ClipData } from "../models.slint";
+
+component KV inherits HorizontalLayout {
+    in property <string> k;
+    in property <string> v;
+    in property <color> vcolor: Theme.fg-1;
+    spacing: 12px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    Text { text: root.k; font-size: 12px; color: Theme.fg-2; vertical-alignment: center; }
+    Rectangle { horizontal-stretch: 1; }
+    SelectableText {
+        text: root.v;
+        font-family: Theme.font-mono;
+        font-size: 11.5px;
+        color: root.vcolor;
+        horizontal-alignment: right;
+        wrap: word-wrap;
+    }
+}
+
+component Twirl inherits VerticalLayout {
+    in property <string> label;
+    in-out property <bool> open: false;
+    Rectangle {
+        height: 1px;
+        background: Theme.border-1;
+    }
+    Rectangle {
+        background: head-touch.has-hover ? Theme.paper-2 : transparent;
+        HorizontalLayout {
+            padding-left: 18px; padding-right: 18px; padding-top: 12px; padding-bottom: 12px;
+            spacing: 9px;
+            AppIcon { name: root.open ? "chevdown" : "chevright"; size: 14px; tint: Theme.fg-3; y: (parent.height - self.height)/2; }
+            Text { text: root.label; font-family: Theme.font-mono; font-size: 10px; letter-spacing: 1.2px; color: Theme.fg-2; vertical-alignment: center; horizontal-stretch: 1; }
+        }
+        head-touch := TouchArea { mouse-cursor: pointer; clicked => { root.open = !root.open; } }
+    }
+    // collapse via clipped height so @children stays unconditional
+    Rectangle {
+        clip: true;
+        height: root.open ? body.preferred-height : 0px;
+        animate height { duration: Theme.dur-fast; }
+        body := VerticalLayout {
+            x: 0; y: 0; width: 100%;
+            padding-left: 18px; padding-right: 18px; padding-bottom: 16px;
+            spacing: 0;
+            @children
+        }
+    }
+}
+
+component DcRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <[string]> items;
+    spacing: 8px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    Text { text: root.label; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; width: 56px; vertical-alignment: center; }
+    HorizontalLayout {
+        spacing: 5px;
+        alignment: start;
+        if root.items.length == 0: Text { text: "—"; color: Theme.fg-3; font-size: 12px; vertical-alignment: center; }
+        for d in root.items: DataChip { cls: d; }
+    }
+}
+
+export component Inspector inherits Rectangle {
+    property <ClipData> c: AppState.selected-clip;
+    width: 420px;
+    background: Theme.paper-pure;
+    border-width: 1px;
+    border-color: Theme.border-2;
+    drop-shadow-color: Theme.shadow-soft;
+    drop-shadow-blur: 32px;
+    drop-shadow-offset-x: -8px;
+
+    VerticalLayout {
+        // head
+        Rectangle {
+            background: Theme.paper-pure;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+                HorizontalLayout {
+                    Eyebrow { text: "INSPECTOR · L2"; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    IconButton { icon: "x"; clicked => { AppState.select-clip(""); } }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    RiskDot { tier: root.c.risk; size: 11px; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        spacing: 2px; horizontal-stretch: 1;
+                        Text { text: root.c.name; font-family: Theme.font-mono; font-size: 15px; font-weight: 500; color: Theme.ink; }
+                        SelectableText { text: "v" + root.c.version + " · " + root.c.purpose; wrap: word-wrap; single-line: false; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; width: 100%; }
+                    }
+                    RiskBadge { tier: root.c.risk; y: (parent.height - self.height)/2; }
+                }
+            }
+        }
+        // body
+        ScrollView {
+            VerticalLayout {
+                alignment: start;
+                // capabilities
+                Twirl { label: "CAPABILITIES · CAPABILITYSET"; open: true;
+                    KV { k: "network"; v: root.c.network; }
+                    KV { k: "filesystem"; v: root.c.filesystem; }
+                    KV { k: "chain_calls"; v: root.c.contracts.length == 0 ? "—" : ""; }
+                    for ct in root.c.contracts: HorizontalLayout {
+                        alignment: end;
+                        padding-top: 2px; padding-bottom: 2px;
+                        Rectangle {
+                            border-radius: Theme.r-1;
+                            border-width: 1px;
+                            border-color: Theme.border-1;
+                            background: Theme.stone-50;
+                            HorizontalLayout {
+                                padding-left: 7px; padding-right: 7px; padding-top: 3px; padding-bottom: 3px;
+                                SelectableText { text: ct; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+                            }
+                        }
+                    }
+                    KV { k: "subagent_spawn"; v: "false"; vcolor: Theme.fg-3; }
+                    HorizontalLayout {
+                        padding-top: 10px;
+                        spacing: 6px;
+                        alignment: start;
+                        for cap in root.c.caps: CapGlyph { cap: cap; size: 18px; tint: cap == "write" ? Theme.danger : Theme.ink; }
+                    }
+                }
+                // data classes
+                Twirl { label: "DATA CLASSES · DATACLASSDECL"; open: true;
+                    DcRow { label: "reads"; items: root.c.reads; }
+                    DcRow { label: "writes"; items: root.c.writes; }
+                    DcRow { label: "emits"; items: root.c.emits; }
+                }
+                // risk
+                Twirl { label: "RISK · RISKDECL";
+                    HorizontalLayout {
+                        padding-top: 5px; padding-bottom: 5px;
+                        Text { text: "tier"; font-size: 12px; color: Theme.fg-2; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        RiskBadge { tier: root.c.risk; }
+                    }
+                    KV { k: "required_roles"; v: root.c.quorum-roles.length == 0 ? "—" : join-roles(root.c.quorum-roles); }
+                    KV { k: "break_glass_eligible"; v: contains-itar(root.c.reads) ? "false · ITAR" : "true"; }
+                }
+                // overlay
+                Twirl { label: "OVERLAY · OVERLAYDECL";
+                    KV { k: "certified"; v: "FedRAMP-High, CMMC-L3"; vcolor: Theme.citrate-green-deep; }
+                    KV { k: "not_certified"; v: "ITAR"; vcolor: Theme.danger; }
+                }
+                // procedure
+                Twirl { label: "PROCEDURE · GATES";
+                    for r[i] in root.c.quorum-roles: HorizontalLayout {
+                        padding-top: 5px; padding-bottom: 5px;
+                        spacing: 6px;
+                        Text { text: "step " + (i + 1); font-size: 12px; color: Theme.fg-2; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        RoleGlyph { role: r; size: 18px; }
+                        Text { text: r; font-family: Theme.font-mono; font-size: 11.5px; color: Theme.fg-1; vertical-alignment: center; }
+                    }
+                }
+                // provenance (deepest, links to L4)
+                Twirl { label: "PROVENANCE · PROVENANCEDECL";
+                    KV { k: "publisher"; v: root.c.publisher; }
+                    KV { k: "build_reproducible"; v: root.c.reproducible ? "true" : "false"; vcolor: root.c.reproducible ? Theme.citrate-green-deep : Theme.risk-high-deep; }
+                    KV { k: "agentile_sprint"; v: root.c.sprint; }
+                    KV { k: "content_hash"; v: root.c.payload-hash == "" ? "sha256:9c2e…41ab" : root.c.payload-hash; vcolor: Theme.fg-3; }
+                    Rectangle { height: 12px; }
+                    Btn { text: "Open in Code Drawer · L4"; icon: "code"; kind: "ghost"; clicked => { AppState.open-code(root.c.name); } }
+                }
+                Rectangle { height: 20px; }
+            }
+        }
+    }
+
+    // helpers
+    pure function join-roles(rs: [string]) -> string {
+        rs.length == 0 ? "—" : rs.length == 1 ? rs[0]
+        : rs.length == 2 ? rs[0] + ", " + rs[1]
+        : rs[0] + ", " + rs[1] + ", " + rs[2]
+    }
+    pure function contains-itar(rs: [string]) -> bool {
+        // small fixed check (reads rarely > 3 entries)
+        (rs.length > 0 && rs[0] == "ITAR") || (rs.length > 1 && rs[1] == "ITAR") || (rs.length > 2 && rs[2] == "ITAR")
+    }
+}

@@ -1,0 +1,248 @@
+// =============================================================
+// Citrate Studio — L3 Approval Dock (HITL without fatigue)
+// Four presentations driven by RiskTier → Quorum::for_tier:
+//   Low → auto (silent feed) · Medium → one ambient card
+//   High → quorum card w/ live signatures + SoD · Critical → modal
+// The UI never computes "approved": it submits add_signature and
+// renders the verdict the core returns. SoD is computed by the core.
+// =============================================================
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { AppIcon } from "../icons.slint";
+import { RiskBadge, RiskDot, DataChip, RoleGlyph, Keyframe, SurfBadge, Btn, IconButton, Card, Palettes } from "../primitives.slint";
+import { Eyebrow, Editorial, SelectableText } from "../typography.slint";
+import { AppState, ClipData, ApprovalRow } from "../models.slint";
+
+// roster slot in a quorum card
+component RosterSlot inherits Rectangle {
+    in property <ApprovalRow> slot;
+    height: 46px;
+    border-radius: Theme.r-1;
+    border-width: 1px;
+    border-color: root.slot.signed ? Theme.citrate-green-deep : Theme.border-1;
+    background: root.slot.signed ? Theme.citrate-green-tint : Theme.paper-2;
+    opacity: (root.slot.disabled && !root.slot.signed) ? 0.55 : 1.0;
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px;
+        spacing: 9px;
+        RoleGlyph { role: root.slot.role; y: (parent.height - self.height)/2; }
+        VerticalLayout {
+            alignment: center; spacing: 1px; horizontal-stretch: 1;
+            Text { text: root.slot.role; font-size: 12.5px; font-weight: 500; color: Theme.ink; }
+            Text { text: root.slot.name + " · " + root.slot.fp; font-family: Theme.font-mono; font-size: 9px; letter-spacing: 0.4px; color: Theme.fg-3; }
+        }
+        // action
+        if root.slot.signed: VerticalLayout {
+            alignment: center; spacing: 2px;
+            AppIcon { name: "check"; size: 16px; stroke-weight: 2; tint: Theme.citrate-green-deep; }
+            SurfBadge { surface: root.slot.surface; }
+        }
+        if !root.slot.signed && root.slot.disabled: Text {
+            text: root.slot.reason;
+            font-family: Theme.font-mono; font-size: 9px; color: Theme.fg-3;
+            horizontal-alignment: right; vertical-alignment: center; wrap: word-wrap;
+            width: 92px;
+        }
+        if !root.slot.signed && !root.slot.disabled: Rectangle {
+            border-radius: Theme.r-1;
+            background: Theme.ink;
+            y: (parent.height - self.height)/2;
+            HorizontalLayout {
+                padding-left: 10px; padding-right: 10px; padding-top: 4px; padding-bottom: 4px;
+                Text { text: "Sign ⧗"; color: Theme.paper; font-size: 11px; font-weight: 500; vertical-alignment: center; }
+            }
+            TouchArea { mouse-cursor: pointer; clicked => { AppState.sign(root.slot.role); } }
+        }
+    }
+}
+
+component QuorumCard inherits Rectangle {
+    border-radius: Theme.r-2;
+    border-width: 1px;
+    border-color: Theme.risk-high;
+    background: Theme.paper-pure;
+    drop-shadow-color: Theme.shadow-soft;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    VerticalLayout {
+        // top
+        Rectangle {
+            background: Theme.paper-pure;
+            VerticalLayout {
+                padding: 13px;
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Keyframe { tier: "high"; y: (parent.height - self.height)/2; }
+                    RiskBadge { tier: "high"; y: (parent.height - self.height)/2; }
+                    Text { text: "NofM · " + AppState.pending-clip.quorum-n + " of " + AppState.pending-clip.quorum-roles.length; font-family: Theme.font-mono; font-size: 10px; color: Theme.fg-3; vertical-alignment: center; }
+                }
+                Text { text: AppState.pending-clip.name; font-family: Theme.font-mono; font-size: 13px; font-weight: 500; color: Theme.ink; }
+                SelectableText { text: AppState.pending-clip.purpose; wrap: word-wrap; single-line: false; font-size: 12px; color: Theme.fg-2; width: 100%; }
+                HorizontalLayout {
+                    spacing: 5px; alignment: start;
+                    for d in AppState.pending-clip.reads: DataChip { cls: d; }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border-1; }
+        // body
+        VerticalLayout {
+            padding: 13px;
+            spacing: 11px;
+            // hash pin
+            Rectangle {
+                border-radius: Theme.r-1;
+                border-width: 1px;
+                border-color: Theme.border-1;
+                background: Theme.stone-50;
+                HorizontalLayout {
+                    padding: 9px;
+                    spacing: 7px;
+                    AppIcon { name: "shield"; size: 14px; tint: Theme.fg-2; }
+                    VerticalLayout {
+                        spacing: 2px; horizontal-stretch: 1;
+                        Text { text: "Covers exactly these bytes. If the agent changes the request, the approval voids."; font-size: 11px; color: Theme.fg-1; wrap: word-wrap; }
+                        SelectableText { text: AppState.pending-clip.payload-hash; font-family: Theme.font-mono; font-size: 10px; color: Theme.fg-3; }
+                    }
+                }
+            }
+            // roster
+            VerticalLayout {
+                spacing: 6px;
+                for r in AppState.approval-roster: RosterSlot { slot: r; }
+            }
+            // outcome
+            if AppState.quorum-met: Btn { text: "Quorum met · core returned Approved · resume"; icon: "check"; kind: "primary"; clicked => { AppState.resume(); } }
+            if !AppState.quorum-met: HorizontalLayout {
+                Text { text: AppState.signatures.length + "/" + AppState.pending-clip.quorum-n + " signatures · run paused"; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "core decides"; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-3; }
+            }
+        }
+    }
+}
+
+component MediumCard inherits Rectangle {
+    in property <ClipData> item;
+    border-radius: Theme.r-2;
+    border-width: 1px;
+    border-color: Theme.border-2;
+    background: Theme.paper-pure;
+    drop-shadow-color: #00000014;
+    drop-shadow-blur: 2px;
+    VerticalLayout {
+        Rectangle {
+            VerticalLayout {
+                padding: 11px;
+                spacing: 5px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Keyframe { tier: "medium"; y: (parent.height - self.height)/2; }
+                    RiskBadge { tier: "medium"; y: (parent.height - self.height)/2; }
+                    Text { text: "OneOf · single approver"; font-family: Theme.font-mono; font-size: 10px; color: Theme.fg-3; vertical-alignment: center; }
+                }
+                Text { text: root.item.name; font-family: Theme.font-mono; font-size: 12.5px; font-weight: 500; color: Theme.ink; }
+                SelectableText { text: root.item.purpose; wrap: word-wrap; single-line: false; font-size: 11.5px; color: Theme.fg-2; width: 100%; }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 13px; padding-right: 13px; padding-bottom: 9px;
+            spacing: 7px;
+            alignment: end;
+            Btn { text: "Dismiss"; kind: "ghost"; sm: true; clicked => { AppState.medium-approve(root.item.id); } }
+            Btn { text: "Approve"; icon: "check"; kind: "primary"; sm: true; clicked => { AppState.medium-approve(root.item.id); } }
+        }
+    }
+}
+
+component OversightDial inherits VerticalLayout {
+    spacing: 7px;
+    Eyebrow { text: "OVERSIGHT MODE · PER-CAPSULE DIAL"; }
+    Rectangle {
+        height: 32px;
+        border-radius: Theme.r-1;
+        border-width: 1px;
+        border-color: Theme.border-2;
+        clip: true;
+        HorizontalLayout {
+            for opt in [{k: "in", l: "Human-in-loop"}, {k: "on", l: "Human-on-loop"}, {k: "out", l: "Human-out"}]: Rectangle {
+                background: AppState.oversight == opt.k ? Theme.ink : Theme.paper-pure;
+                horizontal-stretch: 1;
+                Text {
+                    text: opt.l;
+                    color: AppState.oversight == opt.k ? Theme.paper : Theme.fg-2;
+                    font-size: 10.5px; font-weight: 500;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { AppState.set-oversight(opt.k); } }
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 7px;
+        AppIcon { name: "clock"; size: 13px; tint: Theme.fg-2; y: (parent.height - self.height)/2; }
+        Text {
+            text: AppState.oversight == "out" ? ("Auto-approve · Low/Medium only · expires in " + AppState.ttl-fmt(AppState.ttl)) : "High / Critical always ask · no bypass";
+            font-family: Theme.font-mono; font-size: 10.5px; color: Theme.fg-2;
+            vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1;
+        }
+    }
+}
+
+export component ApprovalDock inherits Rectangle {
+    background: Theme.paper-2;
+    VerticalLayout {
+        // head
+        Rectangle {
+            height: 47px;
+            HorizontalLayout {
+                padding-left: 16px; padding-right: 16px;
+                spacing: 8px;
+                AppIcon { name: "gavel"; size: 15px; tint: Theme.fg-1; y: (parent.height - self.height)/2; }
+                Eyebrow { text: "APPROVAL DOCK · L3"; color: Theme.fg-1; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                IconButton { icon: "chevright"; clicked => { AppState.dock-collapsed = true; } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border-1; }
+        // body
+        ScrollView {
+            VerticalLayout {
+                padding: 14px;
+                spacing: 12px;
+                alignment: start;
+                if AppState.has-pending: QuorumCard { }
+                for m in AppState.medium-clips: MediumCard { item: m; }
+                // empty
+                if !AppState.has-pending && AppState.medium-clips.length == 0: VerticalLayout {
+                    padding-top: 24px; padding-bottom: 24px;
+                    spacing: 8px;
+                    HorizontalLayout { alignment: center; AppIcon { name: "check"; size: 22px; tint: Theme.fg-3; } }
+                    HorizontalLayout { alignment: center; Editorial { text: "No approvals pending."; horizontal-alignment: center; } }
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Low-tier calls auto-approve and log silently. They surface only in the audit scrubber below.";
+                            font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3;
+                            horizontal-alignment: center; wrap: word-wrap; width: 220px;
+                        }
+                    }
+                }
+                OversightDial { }
+                // auto-approved feed
+                if AppState.auto-feed.length > 0: VerticalLayout {
+                    spacing: 6px;
+                    Eyebrow { text: "AUTO-APPROVED · LOGGED SILENTLY"; }
+                    for f in AppState.auto-feed: HorizontalLayout {
+                        spacing: 8px;
+                        padding-top: 5px; padding-bottom: 5px;
+                        RiskDot { tier: "low"; y: (parent.height - self.height)/2; }
+                        SelectableText { text: f; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-2; horizontal-stretch: 1; }
+                        AppIcon { name: "check"; size: 12px; stroke-weight: 2; tint: Theme.citrate-green-deep; y: (parent.height - self.height)/2; }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,211 @@
+// =============================================================
+// Citrate Studio — Audit Scrubber (sealed ledger zone, L1/L3)
+// A PAST run as read-only frames. verify_integrity() → green spine.
+// Tampering shows as a broken link at the exact sequence where
+// previous_hash mismatches. Read-only is a feature: scrub, not edit.
+// =============================================================
+import { Theme } from "../theme.slint";
+import { AppIcon } from "../icons.slint";
+import { Btn, IconButton, SurfBadge, Palettes } from "../primitives.slint";
+import { SelectableText } from "../typography.slint";
+import { AppState, FrameData } from "../models.slint";
+
+component SealedKV inherits HorizontalLayout {
+    in property <string> k;
+    in property <string> v;
+    in property <bool> mono: false;
+    in property <bool> accent: false;
+    in property <bool> danger: false;
+    spacing: 12px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    Text { text: root.k; font-size: 11.5px; color: Theme.sealed-fg-2; vertical-alignment: center; }
+    Rectangle { horizontal-stretch: 1; }
+    SelectableText {
+        text: root.v;
+        font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+        font-size: root.mono ? 10.5px : 11.5px;
+        color: root.danger ? Theme.danger : (root.accent ? Theme.citrate-green : Theme.sealed-fg);
+        horizontal-alignment: right;
+    }
+}
+
+component Frame inherits Rectangle {
+    in property <FrameData> f;
+    in property <int> idx;
+    property <bool> active: AppState.scrubber-active == idx;
+    property <bool> tampered: AppState.scrubber-tampered && idx >= 6;
+    property <bool> broken-link: AppState.scrubber-tampered && idx == 5;
+    width: 78px;
+    VerticalLayout {
+        padding-top: 26px;
+        spacing: 0;
+        alignment: start;
+        // node + connector
+        Rectangle {
+            height: 16px;
+            // connector to next frame (right half)
+            Rectangle {
+                x: parent.width / 2;
+                y: 7px;
+                width: parent.width;
+                height: 2px;
+                background: root.broken-link ? Theme.danger : Theme.citrate-green;
+                opacity: root.idx == AppState.frames.length - 1 ? 0 : 1;
+            }
+            // node
+            Rectangle {
+                width: 16px; height: 16px; border-radius: 8px;
+                x: (parent.width - 16px)/2;
+                border-width: 2px;
+                border-color: root.tampered ? Theme.danger : Theme.citrate-green;
+                background: root.tampered ? Theme.danger : Theme.sealed-bg;
+                drop-shadow-color: root.active ? Theme.citrate-green.with-alpha(0.25) : transparent;
+                drop-shadow-blur: root.active ? 8px : 0;
+                if root.f.anchor != "" && !root.tampered: AppIcon { name: "anchor"; size: 9px; stroke-weight: 2; tint: Theme.sealed-bg; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+                if root.tampered: AppIcon { name: "x"; size: 9px; stroke-weight: 2.5; tint: #ffffff; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+            }
+        }
+        Text { text: "seq " + root.f.seq; font-family: Theme.font-mono; font-size: 8px; color: Theme.sealed-fg-3; horizontal-alignment: center; width: 100%; }
+        Text {
+            text: root.f.evt;
+            font-family: Theme.font-mono;
+            font-size: 8px;
+            letter-spacing: 0.2px;
+            color: root.active ? #ffffff : Theme.sealed-fg-2;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            width: 100%;
+        }
+        if root.f.anchor != "": AppIcon { name: "anchor"; size: 10px; tint: Theme.citrate-green; x: (parent.width - self.width)/2; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { AppState.scrubber-active = root.idx; } }
+}
+
+export component AuditScrubber inherits Rectangle {
+    background: Theme.sealed-bg;
+    property <FrameData> af: AppState.frames[AppState.scrubber-active];
+
+    // collapsed strip
+    if AppState.sealed-collapsed: Rectangle {
+        HorizontalLayout {
+            padding-left: 20px; padding-right: 20px;
+            spacing: 10px;
+            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.citrate-green; y: (parent.height - self.height)/2; }
+            Text { text: "SEALED LEDGER · AUDIT SCRUBBER"; font-family: Theme.font-mono; font-size: 11px; letter-spacing: 1.5px; color: Theme.sealed-fg; vertical-alignment: center; }
+            Text { text: AppState.frames.length + " frames · chain verified"; font-family: Theme.font-mono; font-size: 10px; color: Theme.sealed-fg-3; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            AppIcon { name: "chevup"; size: 15px; tint: Theme.sealed-fg-2; y: (parent.height - self.height)/2; }
+        }
+        TouchArea { clicked => { AppState.sealed-collapsed = false; } }
+    }
+
+    // expanded
+    if !AppState.sealed-collapsed: VerticalLayout {
+        // head
+        Rectangle {
+            height: 42px;
+            HorizontalLayout {
+                padding-left: 20px; padding-right: 20px;
+                spacing: 12px;
+                AppIcon { name: "layers"; size: 15px; tint: Theme.citrate-green; y: (parent.height - self.height)/2; }
+                Text { text: "AUDIT SCRUBBER"; font-family: Theme.font-mono; font-size: 11px; letter-spacing: 1.5px; color: Theme.sealed-fg; vertical-alignment: center; }
+                Text { text: "read-only replay · append-only · hash-chained"; font-family: Theme.font-mono; font-size: 10px; color: Theme.sealed-fg-3; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                // integrity verdict
+                HorizontalLayout {
+                    spacing: 6px;
+                    AppIcon {
+                        name: AppState.scrubber-tampered ? "alert" : "check";
+                        size: 13px; stroke-weight: AppState.scrubber-tampered ? 1.5 : 2;
+                        tint: AppState.scrubber-tampered ? Theme.danger : Theme.citrate-green;
+                        y: (parent.height - self.height)/2;
+                    }
+                    Text {
+                        text: AppState.scrubber-tampered ? "previous_hash break at seq 6: chain tampered" : ("verify_integrity() ok · " + AppState.frames.length + " frames");
+                        font-family: Theme.font-mono; font-size: 10.5px; letter-spacing: 0.4px;
+                        color: AppState.scrubber-tampered ? Theme.danger : Theme.citrate-green;
+                        vertical-alignment: center;
+                    }
+                }
+                Btn { text: AppState.scrubber-tampered ? "Restore" : "Simulate tamper"; kind: "ghost-dark"; sm: true; clicked => { AppState.scrubber-tampered = !AppState.scrubber-tampered; } }
+                Btn { text: "Export"; icon: "download"; kind: "ghost-dark"; sm: true; }
+                IconButton { icon: "chevdown"; tint: Theme.sealed-fg-2; on-dark: true; clicked => { AppState.sealed-collapsed = true; } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.sealed-border; }
+
+        // scrubber body
+        Rectangle {
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                // spine
+                Flickable {
+                    height: 96px;
+                    viewport-width: max(AppState.frames.length * 78px, self.width);
+                    viewport-height: self.height;
+                    HorizontalLayout {
+                        alignment: start;
+                        for f[i] in AppState.frames: Frame { f: f; idx: i; }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.sealed-border; }
+                // frame detail
+                HorizontalLayout {
+                    spacing: 18px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 0;
+                        Text { text: "AUDITRECORD · FRAME " + root.af.seq; font-family: Theme.font-mono; font-size: 9px; letter-spacing: 1.4px; color: Theme.sealed-fg-3; }
+                        Rectangle { height: 8px; }
+                        SealedKV { k: "event_type"; v: root.af.evt; }
+                        SealedKV { k: "actor"; v: root.af.actor; mono: true; }
+                        SealedKV { k: "previous_hash"; v: (AppState.scrubber-tampered && root.af.seq >= 6) ? "✗ mismatch" : "0x" + (root.af.seq * 7 + 19) + "c1…ae"; mono: true; danger: AppState.scrubber-tampered && root.af.seq >= 6; }
+                        SealedKV { k: "chain_anchor"; v: root.af.anchor == "" ? "— pending" : root.af.anchor; accent: root.af.anchor != ""; }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 0;
+                        Text { text: "ROLESIGNATURE"; font-family: Theme.font-mono; font-size: 9px; letter-spacing: 1.4px; color: Theme.sealed-fg-3; }
+                        Rectangle { height: 8px; }
+                        if root.af.role != "": Rectangle {
+                            height: 44px;
+                            border-radius: Theme.r-1;
+                            border-width: 1px;
+                            border-color: Theme.sealed-border;
+                            background: #cde7d60a;
+                            HorizontalLayout {
+                                padding-left: 10px; padding-right: 10px;
+                                spacing: 9px;
+                                Rectangle {
+                                    width: 24px; height: 24px; border-radius: 5px;
+                                    border-width: 1px; border-color: Theme.sealed-border-2;
+                                    y: (parent.height - self.height)/2;
+                                    Text { text: Palettes.role-abbr(root.af.role); font-family: Theme.font-mono; font-size: 9px; color: Theme.sealed-fg; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                VerticalLayout {
+                                    alignment: center; spacing: 1px;
+                                    Text { text: root.af.role; font-size: 12px; color: Theme.sealed-fg; }
+                                    Text { text: "signed · 2026-06-03"; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.sealed-fg-3; }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                SurfBadge { surface: root.af.surface; fg: Theme.sealed-fg-2; stroke: Theme.sealed-border-2; y: (parent.height - self.height)/2; }
+                            }
+                        }
+                        if root.af.role == "": Text {
+                            text: "System frame · no role signature. Surface: " + root.af.surface;
+                            font-family: Theme.font-mono; font-size: 11px; color: Theme.sealed-fg-3;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { height: 10px; }
+                        Text {
+                            text: "Drag a node to scrub. Deterministic replay of recorded records — not re-execution.";
+                            font-size: 10.5px; color: Theme.sealed-fg-3; wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

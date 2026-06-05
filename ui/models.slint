@@ -1,0 +1,223 @@
+// =============================================================
+// Citrate Studio — data model + app state + intents
+//
+// Mirrors studio-data.js. Every field traces to a runtime
+// primitive named in the design spec. The front end renders this
+// state and fires intents (callbacks); the Rust "core" mutates the
+// state and decides quorum — the UI never computes "approved".
+// =============================================================
+
+// ---- a capsule clip in the run (ordered call sequence) ----
+export struct ClipData {
+    id: string,
+    name: string,
+    version: string,
+    risk: string,            // low | medium | high | critical
+    gate: string,            // auto | medium | high | critical
+    caps: [string],          // capability keys (read|write|fs|net|cli|clocks|random)
+    reads: [string],
+    writes: [string],
+    emits: [string],
+    start: int,              // timeline units
+    dur: int,
+    purpose: string,
+    output: string,
+    data-json: string,       // pre-formatted structured ToolResult.data
+    publisher: string,
+    reproducible: bool,
+    sprint: string,
+    contracts: [string],
+    quorum-n: int,           // for high/critical gates
+    quorum-roles: [string],
+    payload-hash: string,
+    dimmed: bool,            // dry-run excluded or solo'd-out (set by core on toggle)
+    network: string,         // resolved network policy label
+    filesystem: string,      // resolved filesystem label
+}
+
+// ---- audit chain frame (read-only replay) ----
+export struct FrameData {
+    seq: int,
+    evt: string,
+    actor: string,
+    role: string,
+    anchor: string,          // PerApproval | NightlyMerkle | ""
+    surface: string,
+}
+
+// ---- palette tool / capsule ----
+export struct ToolData {
+    name: string,
+    risk: string,
+    cap: string,
+    nature: string,
+}
+export struct CapsuleData {
+    name: string,
+    version: string,
+    risk: string,
+    caps: [string],
+    signing: string,
+    verified: bool,
+    dc: string,              // a data class tag, or ""
+    hash: string,            // placeholder hash when unverified
+}
+
+// ---- doctor + tripwires ----
+export struct DoctorCheck { id: string, sev: string, note: string }
+export struct Tripwire { id: string, code: string, cond: string, sev: string, state: string, tx: string }
+
+// ---- roster + accumulated signatures ----
+export struct Signer { role: string, name: string, fp: string, proposer: bool, readonly: bool }
+export struct SigRow { role: string, name: string, surface: string }
+
+// A computed approval slot — the core (Rust) owns the SoD logic and
+// hands the UI a ready-to-render row (signed / disabled + reason).
+export struct ApprovalRow {
+    role: string,
+    name: string,
+    fp: string,
+    signed: bool,
+    surface: string,
+    disabled: bool,
+    reason: string,
+}
+
+// ---- chat / onboarding / settings models ----
+export struct CardStep { name: string, risk: string, note: string }
+export struct ChatMsg {
+    kind: string,        // agent | user | typing | card | approval
+    text: string,
+    card-title: string,
+    steps: [CardStep],
+    cta: string,
+}
+export struct Member {
+    id: string,
+    name: string,
+    title: string,
+    role: string,
+    team-role: string,   // Admin | Member | ""
+}
+export struct OnboardStep {
+    id: string,
+    label: string,
+    icon: string,
+    value: string,       // chosen display value ("" = not done)
+    done: bool,
+    active: bool,
+}
+
+export global AppState {
+    // ---- catalog data ----
+    in property <[ClipData]> clips;
+    in property <[ToolData]> tools-chain;
+    in property <[ToolData]> tools-code;
+    in property <[CapsuleData]> capsules;
+    in property <[FrameData]> frames;
+    in property <[DoctorCheck]> doctor;
+    in property <[Tripwire]> tripwires;
+    in property <[Signer]> signers;
+
+    // run header
+    in property <string> run-title: "Nightly reconciliation";
+    in property <string> run-id: "SOP-RECON-NIGHTLY";
+    in property <string> run-sub: "SOP · cron 02:00 UTC · 9 tenant facilities";
+    in property <int> units-total: 56;
+
+    // ---- run state (core-owned) ----
+    in property <float> playhead;
+    in property <string> status: "idle";       // idle | running | paused | done
+    in property <string> pending-gate-id;       // "" when none
+    in property <[SigRow]> signatures;
+    in property <int> quorum-need;
+    in property <bool> quorum-met;
+    in property <bool> has-pending;             // a high/critical gate is awaiting quorum
+    in property <ClipData> pending-clip;        // the gated capsule
+    in property <[ApprovalRow]> approval-roster; // computed slots (core owns SoD)
+    in property <[ClipData]> medium-clips;      // queued medium ambient cards
+    in property <[string]> auto-feed;           // capsule names
+    in property <bool> trip-fired;
+    in property <string> palette-search;
+
+    // ---- ui state ----
+    in-out property <string> selected-id;       // "" when none
+    in property <bool> has-selected;            // an inspector target is open
+    in property <ClipData> selected-clip;       // the inspected capsule
+    in property <bool> has-code;                // code drawer open
+    in property <ClipData> code-clip-data;      // the L4 target
+    in property <string> code-manifest;         // generated manifest.toml
+    in property <string> code-wit;              // generated capsule.wit
+    in property <string> code-calldata;         // decoded calldata view
+    in-out property <bool> code-revalidate;     // live WIT/manifest recheck demo
+    in-out property <string> code-tab: "manifest";
+    in-out property <string> code-clip;         // capsule name or ""
+    in-out property <string> workspace: "advanced";  // beginner | advanced
+    in-out property <string> depth: "L1";
+    in-out property <bool> dock-collapsed: false;
+    in-out property <bool> sealed-collapsed: false;
+    in-out property <bool> health-open: false;
+    in-out property <bool> breakglass-open: false;
+    in-out property <bool> settings-open: false;
+    in-out property <bool> chat-open: false;
+    in-out property <bool> l0-visible: true;
+    in-out property <string> oversight: "in";   // in | on | out
+    in-out property <int> ttl: 3600;
+    in-out property <bool> scrubber-tampered: false;
+    in-out property <int> scrubber-active: 6;
+
+    // ---- intents (UI submits; core decides) ----
+    callback play();
+    callback pause();
+    callback rewind();
+    callback step();
+    callback step-back();
+    callback sign(/* role */ string);
+    callback resume();
+    callback medium-approve(/* clip id */ string);
+    callback toggle-dry(/* clip id */ string);
+    callback toggle-solo(/* clip id */ string);
+    callback select-clip(/* clip id */ string);
+    callback select-by-name(/* capsule name */ string);
+    callback open-code(/* capsule name */ string);
+    callback go-depth(/* level */ string);
+    callback set-workspace(string);
+    callback set-oversight(string);
+    callback set-search(string);
+
+    // ---- entry / view ----
+    in-out property <string> view: "studio";    // studio | onboard
+
+    // ---- agent chat (Beginner workspace + Advanced drawer) ----
+    in property <[ChatMsg]> chat-messages;
+    in property <[string]> chat-quick;
+    in property <bool> chat-busy;
+    callback chat-send(string);
+    callback chat-chip(string);
+    callback chat-approve();                     // beginner inline approve → outcome card
+    callback open-advanced-run();                // CTA: open Studio + run
+
+    // ---- settings + RBAC ----
+    in-out property <string> settings-section: "rbac";  // account|rbac|roster|grants|runtime|policy
+    in property <[Member]> rbac-members;
+    in property <[Member]> rbac-addable;
+    in property <[string]> rbac-dropped;
+    in-out property <bool> rbac-adding: false;
+    callback rbac-drop(string);
+    callback rbac-add(string);
+
+    // ---- onboarding (conversational first-run) ----
+    in property <[OnboardStep]> onboard-steps;
+    in property <[ChatMsg]> onboard-messages;
+    in property <[string]> onboard-quick;
+    in property <int> onboard-progress;          // 0..100
+    in property <bool> onboard-ready;
+    in property <bool> onboard-team;             // team workspace chosen (RBAC note)
+    callback onboard-send(string);
+    callback onboard-chip(string);
+    callback enter-studio();
+    callback start-onboarding();
+
+    // ---- small helpers ----
+    pure callback ttl-fmt(int) -> string;
+}

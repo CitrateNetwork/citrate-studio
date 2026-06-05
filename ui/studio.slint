@@ -1,0 +1,138 @@
+// =============================================================
+// Citrate Studio — entry / app shell
+// Two-zone law: paper = editable composition (reversible) ·
+// evergreen = sealed ledger (permanent). Never the same surface.
+// =============================================================
+
+// Compile-time font embedding (Slint's recommended path).
+import "../assets/fonts/Geist.ttf";
+import "../assets/fonts/GeistMono.ttf";
+import "../assets/fonts/SpaceGrotesk.ttf";
+import "../assets/fonts/Cormorant.ttf";
+
+import { Theme, Settings } from "theme.slint";
+import { Editorial, Eyebrow } from "typography.slint";
+import { AppIcon } from "icons.slint";
+import { IconButton, Btn } from "primitives.slint";
+import { AppState } from "models.slint";
+import { Chrome } from "components/chrome.slint";
+import { CapsulePalette } from "components/palette.slint";
+import { CompositionCanvas } from "components/canvas.slint";
+import { Inspector } from "components/inspector.slint";
+import { AuditScrubber } from "components/scrubber.slint";
+import { ApprovalDock } from "components/approval.slint";
+import { CodeDrawer, HealthReport, BreakGlassConsole } from "components/overlays.slint";
+import { BeginnerView, ChatDrawer } from "components/chat.slint";
+import { SettingsOverlay } from "components/settings.slint";
+import { Onboarding } from "components/onboarding.slint";
+
+export { AppState, Settings }
+
+export component StudioWindow inherits Window {
+    title: "Citrate Studio";
+    preferred-width: 1360px;
+    preferred-height: 880px;
+    min-width: 880px;
+    min-height: 600px;
+    background: Theme.paper;
+    default-font-family: Theme.font-sans;
+    default-font-size: Theme.t-sm;
+
+    property <bool> advanced: AppState.workspace == "advanced";
+    // responsive breakpoints — set imperatively in a `changed` handler
+    // (NOT a reactive width binding) so they don't form a layout loop.
+    in-out property <bool> narrow: false;   // < 760px → hide palette
+    in-out property <bool> mid: false;      // < 1040px → hide dock
+    property <bool> palette-visible: !root.narrow;
+    property <bool> dock-visible: !AppState.dock-collapsed && !root.mid;
+    changed width => {
+        root.narrow = root.width < 760px;
+        root.mid = root.width < 1040px;
+    }
+    init => {
+        root.narrow = root.width < 760px;
+        root.mid = root.width < 1040px;
+    }
+
+    VerticalLayout {
+        Chrome { advanced: root.advanced; }
+
+        // Body fills remaining height. A conditional `if` is not a
+        // stretchable layout slot, so the body lives in an always-present
+        // Rectangle (vertical-stretch) and the conditionals fill it.
+        Rectangle {
+            vertical-stretch: 1;
+
+        // ===== BEGINNER (chat-first workspace) =====
+        if !root.advanced: BeginnerView { width: 100%; height: 100%; }
+
+        // ===== ADVANCED two-zone body =====
+        if root.advanced: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 0;
+            // palette (paper)
+            if root.palette-visible: CapsulePalette {
+                width: 248px;
+            }
+            // center stack: a plain Rectangle whose height is driven
+            // top-down by the row; children are positioned manually off
+            // `cs.height` so no layout-info binding loop forms.
+            cs := Rectangle {
+                horizontal-stretch: 1;
+                clip: true;
+                property <length> sealed-h: AppState.sealed-collapsed ? 46px : self.height * 0.34;
+                // canvas + inspector overlay
+                Rectangle {
+                    x: 0; y: 0;
+                    width: 100%;
+                    height: cs.height - cs.sealed-h;
+                    clip: true;
+                    CompositionCanvas { width: 100%; height: 100%; }
+                    if AppState.has-selected: Inspector {
+                        x: parent.width - self.width;
+                        y: 0;
+                        height: 100%;
+                    }
+                }
+                // sealed ledger zone (evergreen)
+                Rectangle {
+                    x: 0;
+                    y: cs.height - cs.sealed-h;
+                    width: 100%;
+                    height: cs.sealed-h;
+                    Rectangle { x: 0; y: 0; width: 100%; height: 2px; background: Theme.ink; }
+                    AuditScrubber { x: 0; y: 2px; width: 100%; height: parent.height - 2px; }
+                }
+            }
+            // approval dock (paper)
+            if root.dock-visible: ApprovalDock {
+                width: 360px;
+            }
+        }
+        } // body wrapper
+    }
+
+    // collapsed-dock reopener
+    if root.advanced && !root.dock-visible && root.width >= 1040px: Rectangle {
+        x: root.width - 54px;
+        y: 120px;
+        width: 40px;
+        height: 40px;
+        border-radius: Theme.r-1;
+        background: AppState.has-pending ? Theme.risk-high : Theme.ink;
+        drop-shadow-color: Theme.shadow-soft;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        AppIcon { name: "gavel"; size: 18px; tint: #ffffff; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
+        TouchArea { mouse-cursor: pointer; clicked => { AppState.dock-collapsed = false; } }
+    }
+
+    // ===== overlays (render above everything) =====
+    if root.advanced && AppState.chat-open: ChatDrawer { x: 0; y: 0; width: 100%; height: 100%; }
+    if AppState.settings-open: SettingsOverlay { x: 0; y: 0; width: 100%; height: 100%; }
+    if AppState.health-open: HealthReport { x: 0; y: 0; width: 100%; height: 100%; }
+    if AppState.breakglass-open: BreakGlassConsole { x: 0; y: 0; width: 100%; height: 100%; }
+    if AppState.has-code: CodeDrawer { x: 0; y: 0; width: 100%; height: 100%; }
+    // first-run onboarding covers the shell when active
+    if AppState.view == "onboard": Onboarding { x: 0; y: 0; width: 100%; height: 100%; }
+}

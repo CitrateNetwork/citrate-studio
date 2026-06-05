@@ -1,0 +1,333 @@
+// =============================================================
+// Citrate Studio — depth overlays
+// L4 Code Drawer (the floor), Health Report (signed Doctor + 9
+// tripwires), Break-Glass Console (the emergency path). Each opens
+// over a scrim; the code drawer + break-glass are sealed-zone.
+// =============================================================
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { AppIcon } from "../icons.slint";
+import { RiskBadge, SevDot, Btn, IconButton, SurfBadge, Palettes } from "../primitives.slint";
+import { Eyebrow, SelectableText, Title } from "../typography.slint";
+import { AppState, DoctorCheck, Tripwire } from "../models.slint";
+
+// ---------- L4 CODE DRAWER ----------
+component DrawerTab inherits Rectangle {
+    in property <string> id;
+    in property <string> label;
+    property <bool> on: AppState.code-tab == id;
+    border-radius: Theme.r-1;
+    background: on ? Theme.sealed-surface : transparent;
+    border-width: 1px;
+    border-color: on ? Theme.sealed-border : transparent;
+    horizontal-stretch: 0;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; padding-top: 7px; padding-bottom: 7px;
+        Text { text: root.label; font-family: Theme.font-mono; font-size: 11px; color: root.on ? #ffffff : Theme.sealed-fg-2; vertical-alignment: center; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { AppState.code-tab = root.id; } }
+}
+
+export component CodeDrawer inherits Rectangle {
+    // scrim
+    background: #0c221688;
+    TouchArea { clicked => { AppState.has-code = false; AppState.code-clip = ""; } }
+    Rectangle {
+        x: parent.width - self.width;
+        width: min(760px, parent.width * 0.92);
+        background: Theme.sealed-bg;
+        TouchArea { } // swallow clicks
+        VerticalLayout {
+            // head
+            Rectangle {
+                height: 56px;
+                HorizontalLayout {
+                    padding-left: 20px; padding-right: 20px;
+                    spacing: 12px;
+                    AppIcon { name: "code"; size: 16px; tint: Theme.citrate-green; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        alignment: center; spacing: 1px; horizontal-stretch: 1;
+                        HorizontalLayout {
+                            spacing: 6px; alignment: start;
+                            Text { text: AppState.code-clip-data.name; font-family: Theme.font-mono; font-size: 13px; color: #ffffff; }
+                            Text { text: AppState.code-clip-data.version; font-family: Theme.font-mono; font-size: 13px; color: Theme.sealed-fg-3; }
+                        }
+                        Text { text: "L4 · THE FLOOR · read-first, edit-with-revalidate"; font-family: Theme.font-mono; font-size: 9.5px; letter-spacing: 1px; color: Theme.sealed-fg-3; }
+                    }
+                    // live revalidation toggle
+                    Rectangle {
+                        border-radius: Theme.r-1;
+                        border-width: 1px;
+                        border-color: AppState.code-revalidate ? Theme.danger : Theme.sealed-border-2;
+                        background: AppState.code-revalidate ? Theme.danger.with-alpha(0.18) : transparent;
+                        y: (parent.height - self.height)/2;
+                        HorizontalLayout {
+                            padding-left: 9px; padding-right: 9px; padding-top: 5px; padding-bottom: 5px;
+                            spacing: 6px;
+                            Text { text: AppState.code-revalidate ? "☑" : "☐"; color: Theme.sealed-fg-2; font-size: 11px; vertical-alignment: center; }
+                            Text { text: "edit: declare WasiSockets"; font-family: Theme.font-mono; font-size: 10.5px; color: Theme.sealed-fg-2; vertical-alignment: center; }
+                        }
+                        TouchArea { mouse-cursor: pointer; clicked => { AppState.code-revalidate = !AppState.code-revalidate; } }
+                    }
+                    IconButton { icon: "x"; tint: Theme.sealed-fg-2; on-dark: true; clicked => { AppState.has-code = false; AppState.code-clip = ""; } }
+                }
+            }
+            // revalidation blocker banner
+            if AppState.code-revalidate: Rectangle {
+                height: 40px;
+                background: Theme.danger.with-alpha(0.18);
+                border-width: 1px;
+                border-color: Theme.danger;
+                border-radius: Theme.r-1;
+                HorizontalLayout {
+                    padding-left: 14px; padding-right: 14px;
+                    spacing: 9px;
+                    AppIcon { name: "alert"; size: 15px; tint: Theme.danger; y: (parent.height - self.height)/2; }
+                    SelectableText {
+                        text: "wasm-linker-recheck · BLOCKER — manifest declares WasiSockets but capsule.wit imports no sockets interface. Cannot load.";
+                        wrap: word-wrap; single-line: false;
+                        font-family: Theme.font-mono; font-size: 10.5px; color: #f0b3a8;
+                        vertical-alignment: center; horizontal-stretch: 1;
+                    }
+                }
+            }
+            // tabs
+            HorizontalLayout {
+                padding-left: 16px; padding-right: 16px; padding-top: 10px;
+                spacing: 4px;
+                alignment: start;
+                DrawerTab { id: "manifest"; label: "manifest.toml"; }
+                DrawerTab { id: "wit"; label: "capsule.wit"; }
+                DrawerTab { id: "calldata"; label: "calldata"; }
+            }
+            // body
+            Rectangle {
+                background: Theme.sealed-surface;
+                border-width: 1px;
+                border-color: Theme.sealed-border;
+                ScrollView {
+                    VerticalLayout {
+                        padding: 18px;
+                        SelectableText {
+                            text: AppState.code-tab == "manifest" ? AppState.code-manifest
+                                : AppState.code-tab == "wit" ? AppState.code-wit
+                                : AppState.code-calldata;
+                            wrap: no-wrap;
+                            single-line: false;
+                            font-family: Theme.font-mono;
+                            font-size: 12px;
+                            color: Theme.sealed-fg;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------- HEALTH REPORT ----------
+component DoctorRow inherits HorizontalLayout {
+    in property <DoctorCheck> c;
+    spacing: 10px;
+    padding-top: 7px; padding-bottom: 7px;
+    SevDot { sev: root.c.sev; y: (parent.height - self.height)/2; }
+    SelectableText { text: root.c.id; font-family: Theme.font-mono; font-size: 11.5px; color: Theme.ink; horizontal-stretch: 1; }
+    Text { text: root.c.note; font-family: Theme.font-mono; font-size: 10px; color: root.c.sev == "Warn" ? Theme.warning : Theme.fg-3; vertical-alignment: center; }
+}
+component TripRow inherits HorizontalLayout {
+    in property <Tripwire> t;
+    property <bool> fired: t.state == "Fired";
+    spacing: 10px;
+    padding-top: 7px; padding-bottom: 7px;
+    Rectangle {
+        width: 8px; height: 8px; border-radius: 4px;
+        background: root.fired ? (root.t.sev == "critical" ? Theme.danger : Theme.risk-high) : Theme.stone-300;
+        y: (parent.height - self.height)/2;
+    }
+    VerticalLayout {
+        spacing: 1px; horizontal-stretch: 1;
+        HorizontalLayout {
+            spacing: 6px; alignment: start;
+            Text { text: root.t.id; font-family: Theme.font-mono; font-size: 11px; color: Theme.ink; vertical-alignment: center; }
+            RiskBadge { tier: root.t.sev; }
+        }
+        Text { text: root.t.cond; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.fg-3; }
+    }
+    if root.fired: SelectableText { text: root.t.tx; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.citrate-green-deep; vertical-alignment: center; }
+    if !root.fired: Text { text: "NoBreach"; font-family: Theme.font-mono; font-size: 9.5px; color: Theme.fg-3; vertical-alignment: center; }
+}
+
+export component HealthReport inherits Rectangle {
+    background: #0c221688;
+    TouchArea { clicked => { AppState.health-open = false; } }
+    Rectangle {
+        width: min(840px, parent.width * 0.9);
+        height: min(560px, parent.height * 0.86);
+        x: (parent.width - self.width)/2;
+        y: (parent.height - self.height)/2;
+        background: Theme.paper-pure;
+        border-radius: Theme.r-3;
+        drop-shadow-color: Theme.shadow-soft;
+        drop-shadow-blur: 40px;
+        TouchArea { }
+        VerticalLayout {
+            Rectangle {
+                height: 64px;
+                HorizontalLayout {
+                    padding-left: 26px; padding-right: 26px;
+                    spacing: 12px;
+                    AppIcon { name: "heart"; size: 18px; tint: Theme.citrate-green-deep; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        alignment: center; spacing: 1px; horizontal-stretch: 1;
+                        Title { text: "Doctor report"; font-size: 22px; }
+                        SelectableText { text: "SignedDoctorReport · TOML body + ed25519 over the literal bytes"; font-family: Theme.font-mono; font-size: 11px; color: Theme.fg-3; }
+                    }
+                    Rectangle {
+                        border-radius: Theme.r-pill; background: Theme.citrate-yellow-tint;
+                        y: (parent.height - self.height)/2;
+                        HorizontalLayout {
+                            padding-left: 9px; padding-right: 9px; padding-top: 3px; padding-bottom: 3px; spacing: 5px;
+                            SevDot { sev: "Warn"; y: (parent.height - self.height)/2; }
+                            Text { text: "1 WARN · 10 PASS"; font-family: Theme.font-mono; font-size: 9.5px; font-weight: 600; letter-spacing: 0.6px; color: Theme.warning; vertical-alignment: center; }
+                        }
+                    }
+                    IconButton { icon: "x"; clicked => { AppState.health-open = false; } }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.border-1; }
+            HorizontalLayout {
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-width: 1px; border-color: Theme.border-1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 22px;
+                            Eyebrow { text: "11 CHECKS · DOCTOR/CHECKS.RS"; }
+                            Rectangle { height: 8px; }
+                            for c in AppState.doctor: DoctorRow { c: c; }
+                        }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 22px;
+                            Eyebrow { text: "9 TRIPWIRES · FEDRAMP · TRIPWIRES/JOBS.RS"; }
+                            Rectangle { height: 8px; }
+                            for t in AppState.tripwires: TripRow { t: t; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------- BREAK-GLASS CONSOLE ----------
+export component BreakGlassConsole inherits Rectangle {
+    background: #0c221680;
+    property <[string]> phases: ["Pending", "Invoked", "Affirmed", "Surfaced"];
+    property <int> current: 1;
+    TouchArea { clicked => { AppState.breakglass-open = false; } }
+    Rectangle {
+        width: min(600px, parent.width * 0.9);
+        x: (parent.width - self.width)/2;
+        y: (parent.height - self.height)/2;
+        height: vbox.preferred-height;
+        background: Theme.sealed-bg;
+        border-radius: Theme.r-3;
+        drop-shadow-color: #000000aa;
+        drop-shadow-blur: 40px;
+        TouchArea { }
+        // top danger rule
+        Rectangle { x: 0; y: 0; width: 100%; height: 4px; background: Theme.danger; border-top-left-radius: Theme.r-3; border-top-right-radius: Theme.r-3; }
+        vbox := VerticalLayout {
+            padding-top: 4px;
+            Rectangle {
+                height: 64px;
+                HorizontalLayout {
+                    padding-left: 26px; padding-right: 26px; spacing: 12px;
+                    AppIcon { name: "alert"; size: 20px; tint: Theme.danger; y: (parent.height - self.height)/2; }
+                    VerticalLayout {
+                        alignment: center; spacing: 1px; horizontal-stretch: 1;
+                        Text { text: "Break-glass console"; font-family: Theme.font-display; font-weight: 600; font-size: 22px; color: #ffffff; letter-spacing: -0.4px; }
+                        SelectableText { text: "SecurityOfficer emergency path · hitl/break_glass.rs"; font-family: Theme.font-mono; font-size: 11px; color: Theme.sealed-fg-3; }
+                    }
+                    IconButton { icon: "x"; tint: Theme.sealed-fg-2; on-dark: true; clicked => { AppState.breakglass-open = false; } }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.sealed-border; }
+            VerticalLayout {
+                padding: 26px;
+                spacing: 16px;
+                // phase spine
+                HorizontalLayout {
+                    spacing: 0;
+                    for p[i] in root.phases: HorizontalLayout {
+                        spacing: 0;
+                        VerticalLayout {
+                            spacing: 6px;
+                            Rectangle {
+                                width: 14px; height: 14px; border-radius: 7px;
+                                background: i <= root.current ? Theme.danger : transparent;
+                                border-width: 2px;
+                                border-color: i <= root.current ? Theme.danger : Theme.sealed-border-2;
+                                x: 0;
+                            }
+                            Text { text: p; font-family: Theme.font-mono; font-size: 9.5px; color: i == root.current ? #ffffff : Theme.sealed-fg-3; }
+                        }
+                        if i < 3: Rectangle {
+                            width: 90px; height: 2px;
+                            y: 6px;
+                            background: i < root.current ? Theme.danger : Theme.sealed-border;
+                        }
+                    }
+                }
+                // 72h countdown
+                Rectangle {
+                    height: 64px;
+                    border-width: 1px; border-color: Theme.sealed-border-2; border-radius: Theme.r-2;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px; spacing: 14px;
+                        AppIcon { name: "clock"; size: 20px; tint: Theme.sealed-fg; y: (parent.height - self.height)/2; }
+                        VerticalLayout {
+                            alignment: center; spacing: 1px; horizontal-stretch: 1;
+                            SelectableText { text: "61:24:08"; font-family: Theme.font-mono; font-size: 26px; color: #ffffff; }
+                            Text { text: "AFFIRMATION_WINDOW = 72h · from invoked_at"; font-family: Theme.font-mono; font-size: 10px; color: Theme.sealed-fg-3; }
+                        }
+                        RiskBadge { tier: "critical"; y: (parent.height - self.height)/2; }
+                    }
+                }
+                // affirmation quorum
+                Eyebrow { text: "AFFIRMATION QUORUM · {REVIEWER, COMPLIANCEOFFICER}"; color: Theme.sealed-fg-2; }
+                for r[i] in ["Reviewer", "ComplianceOfficer"]: Rectangle {
+                    height: 42px;
+                    border-width: 1px; border-color: Theme.sealed-border; border-radius: Theme.r-1;
+                    background: i == 0 ? Theme.citrate-green.with-alpha(0.08) : #cde7d608;
+                    HorizontalLayout {
+                        padding-left: 11px; padding-right: 11px; spacing: 10px;
+                        Rectangle {
+                            width: 24px; height: 24px; border-radius: 5px;
+                            border-width: 1px; border-color: Theme.sealed-border-2;
+                            y: (parent.height - self.height)/2;
+                            Text { text: Palettes.role-abbr(r); font-family: Theme.font-mono; font-size: 9px; color: Theme.sealed-fg; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Text { text: r; font-size: 12.5px; color: Theme.sealed-fg; vertical-alignment: center; horizontal-stretch: 1; }
+                        if i == 0: HorizontalLayout {
+                            spacing: 5px;
+                            AppIcon { name: "check"; size: 14px; stroke-weight: 2; tint: Theme.citrate-green; y: (parent.height - self.height)/2; }
+                            Text { text: "affirmed · Mobile"; font-family: Theme.font-mono; font-size: 10px; color: Theme.citrate-green; vertical-alignment: center; }
+                        }
+                        if i != 0: Text { text: "awaiting ⧗"; font-family: Theme.font-mono; font-size: 11px; color: Theme.sealed-fg-3; vertical-alignment: center; }
+                    }
+                }
+                SelectableText {
+                    text: "The invoking SecurityOfficer cannot self-affirm. ITAR-touching manifests are hard-blocked from this path entirely.";
+                    wrap: word-wrap; single-line: false;
+                    font-size: 11px; color: Theme.sealed-fg-3;
+                }
+            }
+        }
+    }
+}

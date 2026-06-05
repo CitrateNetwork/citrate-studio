@@ -1,0 +1,337 @@
+// =============================================================
+// Citrate Studio — app chrome
+// Evergreen header (sealed identity): brand, L0→L4 depth
+// breadcrumb, workspace toggle, meta icons; and the always-ambient
+// Health Strip (doctor LED + 9 tripwire lamps + break-glass).
+// =============================================================
+import { Theme, Settings } from "../theme.slint";
+import { AppIcon } from "../icons.slint";
+import { IconButton, Palettes } from "../primitives.slint";
+import { AppState, Tripwire } from "../models.slint";
+
+// ---- one depth segment ----
+component DepthSeg inherits Rectangle {
+    in property <string> lx;
+    in property <string> nm;
+    in property <bool> active;
+    in property <bool> stub;
+    callback clicked;
+    border-radius: Theme.r-1;
+    background: active ? Theme.citrate-green : (touch.has-hover ? #cde7d60d : transparent);
+    animate background { duration: Theme.dur-fast; }
+    horizontal-stretch: 0;
+    HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 11px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        spacing: 7px;
+        Text {
+            text: root.lx;
+            font-family: Theme.font-mono;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            color: root.active ? Theme.citrate-green-dark : Theme.sealed-fg-2;
+            vertical-alignment: center;
+        }
+        if root.active || touch.has-hover: Text {
+            text: root.nm;
+            font-family: Theme.font-sans;
+            font-size: 12px;
+            color: root.active ? Theme.ink : Theme.sealed-fg-2;
+            opacity: root.active ? 1.0 : 0.7;
+            vertical-alignment: center;
+        }
+        if root.stub: Rectangle {
+            border-radius: 999px;
+            border-width: 1px;
+            border-color: Theme.citrate-yellow.with-alpha(0.4);
+            y: (parent.height - self.height) / 2;
+            HorizontalLayout {
+                padding-left: 4px;
+                padding-right: 4px;
+                Text {
+                    text: "stub";
+                    font-size: 8px;
+                    letter-spacing: 0.8px;
+                    color: Theme.citrate-yellow;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component DepthBreadcrumb inherits HorizontalLayout {
+    in property <string> depth;
+    spacing: 2px;
+    property <[{lx: string, nm: string, stub: bool}]> segs: [
+        { lx: "L0", nm: "Outcome", stub: true },
+        { lx: "L1", nm: "Composition", stub: false },
+        { lx: "L2", nm: "Inspector", stub: false },
+        { lx: "L3", nm: "Trust", stub: false },
+        { lx: "L4", nm: "Code", stub: false },
+    ];
+    for seg[i] in segs: HorizontalLayout {
+        spacing: 2px;
+        if i > 0: Text {
+            text: "›";
+            color: Theme.sealed-fg-3;
+            font-size: 10px;
+            vertical-alignment: center;
+        }
+        DepthSeg {
+            lx: seg.lx;
+            nm: seg.nm;
+            stub: seg.stub;
+            active: root.depth == seg.lx;
+            clicked => { AppState.go-depth(seg.lx); }
+        }
+    }
+}
+
+// ---- a single tripwire lamp ----
+component Lamp inherits Rectangle {
+    in property <Tripwire> tw;
+    property <bool> fired: tw.state == "Fired";
+    property <bool> critical: tw.sev == "critical";
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: fired ? (critical ? Theme.danger : Theme.risk-high)
+        : (touch.has-hover ? Theme.sealed-border-2 : Theme.sealed-border);
+    background: fired ? (critical ? Theme.danger.with-alpha(0.32) : Theme.risk-high.with-alpha(0.28))
+        : #cde7d608;
+    if fired: AppIcon {
+        name: "alert";
+        size: 11px;
+        tint: critical ? Theme.danger : #ffd479;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    if !fired: Text {
+        text: root.tw.code;
+        font-family: Theme.font-mono;
+        font-size: 8px;
+        color: Theme.sealed-fg-3;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.fired) { AppState.health-open = true; } }
+    }
+}
+
+export component HealthStrip inherits Rectangle {
+    property <bool> any-fired: false;   // set from model below
+    background: Theme.sealed-bg;
+    height: 40px;
+    HorizontalLayout {
+        // doctor status
+        doctor := Rectangle {
+            background: dtouch.has-hover ? #cde7d60a : transparent;
+            border-width: 1px;
+            border-color: Theme.sealed-border;
+            horizontal-stretch: 0;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 9px;
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.citrate-yellow;
+                    drop-shadow-color: Theme.citrate-yellow.with-alpha(0.6);
+                    drop-shadow-blur: 8px;
+                    y: (parent.height - 8px) / 2;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: "DOCTOR · ATTENTION";
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
+                        letter-spacing: 1.2px;
+                        color: Theme.sealed-fg;
+                    }
+                    Text {
+                        text: "10 pass · 1 warn";
+                        font-family: Theme.font-mono;
+                        font-size: 9px;
+                        letter-spacing: 1px;
+                        color: Theme.sealed-fg-3;
+                    }
+                }
+            }
+            dtouch := TouchArea { mouse-cursor: pointer; clicked => { AppState.health-open = true; } }
+        }
+        // tripwire lamps
+        Rectangle {
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 3px;
+                alignment: start;
+                for tw in AppState.tripwires: Lamp { tw: tw; y: (parent.height - self.height) / 2; }
+            }
+        }
+        // break-glass
+        bg := Rectangle {
+            border-width: 1px;
+            border-color: Theme.sealed-border;
+            background: btouch.has-hover ? #cde7d60a : transparent;
+            horizontal-stretch: 0;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 6px;
+                AppIcon { name: "shield"; size: 13px; tint: Theme.sealed-fg-2; y: (parent.height - self.height) / 2; }
+                Text {
+                    text: "BREAK-GLASS";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    letter-spacing: 0.8px;
+                    color: Theme.sealed-fg-2;
+                    vertical-alignment: center;
+                }
+            }
+            btouch := TouchArea { mouse-cursor: pointer; clicked => { AppState.breakglass-open = true; } }
+        }
+    }
+}
+
+export component Chrome inherits Rectangle {
+    in property <bool> advanced;
+    background: Theme.sealed-bg-2;
+    // Rectangle does not derive height from inner content → set it.
+    height: advanced ? 93px : 52px;
+    VerticalLayout {
+        // top bar
+        Rectangle {
+            height: 52px;
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                spacing: 18px;
+                alignment: start;
+                // brand
+                HorizontalLayout {
+                    spacing: 10px;
+                    Image {
+                        source: @image-url("../../assets/brand/citrate_mark_green.svg");
+                        width: 24px;
+                        height: 24px;
+                        y: (parent.height - 24px) / 2;
+                    }
+                    Text {
+                        text: "Citrate";
+                        color: #ffffff;
+                        font-family: Theme.font-display;
+                        font-size: 15px;
+                        font-weight: 600;
+                        letter-spacing: -0.15px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        border-radius: Theme.r-pill;
+                        border-width: 1px;
+                        border-color: Theme.sealed-border-2;
+                        y: (parent.height - self.height) / 2;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            padding-top: 2px;
+                            padding-bottom: 2px;
+                            Text {
+                                text: "STUDIO";
+                                color: Theme.citrate-green;
+                                font-family: Theme.font-mono;
+                                font-size: 9px;
+                                letter-spacing: 1.6px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                // depth or beginner label
+                if root.advanced: DepthBreadcrumb { depth: AppState.depth; y: (parent.height - self.height) / 2; }
+                if !root.advanced: Text {
+                    text: "OUTCOME · CHAT-FIRST";
+                    font-family: Theme.font-mono;
+                    font-size: 10.5px;
+                    letter-spacing: 1px;
+                    color: Theme.sealed-fg-3;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                // meta
+                HorizontalLayout {
+                    spacing: 14px;
+                    Text {
+                        text: "BOEING · PROCUREMENT #14";
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
+                        letter-spacing: 1px;
+                        color: Theme.sealed-fg-2;
+                        vertical-alignment: center;
+                    }
+                    // workspace toggle
+                    Rectangle {
+                        border-radius: Theme.r-1;
+                        border-width: 1px;
+                        border-color: Theme.sealed-border-2;
+                        clip: true;
+                        y: (parent.height - self.height) / 2;
+                        HorizontalLayout {
+                            ws-beg := Rectangle {
+                                background: AppState.workspace == "beginner" ? #cde7d61f : transparent;
+                                HorizontalLayout {
+                                    padding-left: 10px; padding-right: 10px; padding-top: 5px; padding-bottom: 5px;
+                                    Text {
+                                        text: "BEGINNER";
+                                        font-family: Theme.font-mono;
+                                        font-size: 10px;
+                                        letter-spacing: 1px;
+                                        color: AppState.workspace == "beginner" ? #ffffff : Theme.sealed-fg-2;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea { mouse-cursor: pointer; clicked => { AppState.set-workspace("beginner"); } }
+                            }
+                            ws-adv := Rectangle {
+                                background: AppState.workspace == "advanced" ? #cde7d61f : transparent;
+                                HorizontalLayout {
+                                    padding-left: 10px; padding-right: 10px; padding-top: 5px; padding-bottom: 5px;
+                                    Text {
+                                        text: "ADVANCED";
+                                        font-family: Theme.font-mono;
+                                        font-size: 10px;
+                                        letter-spacing: 1px;
+                                        color: AppState.workspace == "advanced" ? #ffffff : Theme.sealed-fg-2;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea { mouse-cursor: pointer; clicked => { AppState.set-workspace("advanced"); } }
+                            }
+                        }
+                    }
+                    IconButton { icon: "chat"; icon-size: 15px; tint: AppState.chat-open ? Theme.citrate-green : Theme.sealed-fg-2; on-dark: true; clicked => { AppState.chat-open = !AppState.chat-open; } }
+                    IconButton { icon: "settings"; icon-size: 15px; tint: Theme.sealed-fg-2; on-dark: true; clicked => { AppState.settings-open = true; } }
+                    IconButton { icon: "bell"; icon-size: 15px; tint: Theme.sealed-fg-2; on-dark: true; clicked => { AppState.health-open = true; } }
+                }
+            }
+        }
+        // health strip (advanced only)
+        if root.advanced: Rectangle {
+            height: 1px;
+            background: Theme.sealed-border;
+        }
+        if root.advanced: HealthStrip { }
+    }
+}

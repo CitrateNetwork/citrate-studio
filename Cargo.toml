@@ -1,0 +1,39 @@
+[package]
+name = "citrate-studio"
+version = "0.1.0"
+edition = "2021"
+authors = ["Citrate Network"]
+license = "BUSL-1.1"
+description = "Citrate Studio — the native agent-harness interface (Slint). The forward-looking UI kit for all Citrate native apps."
+repository = "https://github.com/CitrateNetwork/citrate-studio"
+build = "build.rs"
+
+[[bin]]
+name = "citrate-studio"
+path = "src/main.rs"
+
+[dependencies]
+# Latest stable Slint. Default features give winit + femtovg + the
+# compat-1-2 surface + accessibility. No "weird" deps: this is the
+# standard desktop path. Skia can be swapped in for max text fidelity
+# by replacing default-features with the renderer-skia feature.
+slint = { version = "1.16", default-features = false, features = [
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    "accessibility",
+    "std",
+] }
+
+png = "0.17"
+
+[build-dependencies]
+slint-build = "1.16"
+
+[profile.dev]
+opt-level = 1          # Slint UIs are unbearable at opt-level 0; 1 keeps builds fast and the UI smooth.
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
