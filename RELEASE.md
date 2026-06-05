@@ -5,15 +5,36 @@ The build is installer-ready (`cargo bundle`); the steps that require credential
 run in CI only when their secrets are present, and are documented here so the path to a
 signed `v1.0.0` is explicit.
 
-## Local: a bundle on your machine
+## Local: a signed bundle on your machine
 
 ```sh
 cargo install cargo-bundle
-cargo bundle --release            # → target/release/bundle/<osx|deb|msi>/
+cargo bundle --release --format osx          # → target/release/bundle/osx/Citrate Studio.app
+scripts/sign-macos.sh                        # Developer-ID sign + verify (+ notarize if creds)
 ```
 
-The icon set lives in `assets/icon/` (rasterized from `assets/brand/citrate_mark_green.svg`
-via `rsvg-convert`); bundle metadata is in `Cargo.toml` `[package.metadata.bundle]`.
+`cargo bundle` produces the `.app` (ad-hoc signed). `scripts/sign-macos.sh` re-signs it with
+your **Developer ID Application** cert (hardened runtime, timestamped,
+`packaging/entitlements.plist`) and verifies it.
+
+> **Keychain authorization.** `codesign` needs your keychain's private key. The first run
+> prompts to allow `codesign` to use the key (click *Always Allow*) — so the signing step is
+> **interactive** the first time and cannot run in a locked/headless session. In CI the cert is
+> imported into an unlocked ephemeral keychain (see `release.yml`), so it's non-interactive
+> there.
+
+The app icon is `assets/icon/AppIcon.icns` (built with `iconutil` from the brand SVG); bundle
+metadata is in `Cargo.toml` `[package.metadata.bundle]`.
+
+### Notarization (the step after signing)
+
+Needs Apple notary credentials. Store them once as a keychain profile, then sign+notarize:
+
+```sh
+xcrun notarytool store-credentials citrate \
+  --apple-id <your-apple-id> --team-id DDHUG44QC7 --password <app-specific-password>
+NOTARY_PROFILE=citrate scripts/sign-macos.sh   # signs, submits, staples
+```
 
 ## CI: `.github/workflows/release.yml`
 

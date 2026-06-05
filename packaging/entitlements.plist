@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened-runtime entitlements for the SHIPPED (default-feature) build.
+       It is a network-client GUI app with no JIT: the software renderer needs
+       no executable memory, and the default build excludes wasmtime (the
+       core-live build that JITs WASM is a dev/integration build, not shipped).
+       Outgoing client network needs no entitlement under the hardened runtime. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <false/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <false/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <false/>
+</dict>
+</plist>

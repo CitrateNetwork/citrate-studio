@@ -5,3 +5,4 @@ docs/visual/gallery/
 
 # anchor signing key — NEVER commit
 .anchor-key.env
+assets/icon/AppIcon.iconset/

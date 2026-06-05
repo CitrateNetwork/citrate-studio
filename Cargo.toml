@@ -80,14 +80,7 @@ strip = true           # smaller, distribution-ready binaries
 [package.metadata.bundle]
 name = "Citrate Studio"
 identifier = "ai.citrate.studio"
-icon = [
-    "assets/icon/icon_32.png",
-    "assets/icon/icon_64.png",
-    "assets/icon/icon_128.png",
-    "assets/icon/icon_256.png",
-    "assets/icon/icon_512.png",
-    "assets/icon/icon_1024.png",
-]
+icon = ["assets/icon/AppIcon.icns"]
 category = "Developer Tool"
 short_description = "The native agent-harness interface for the Citrate runtime."
 long_description = """

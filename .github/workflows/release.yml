@@ -73,16 +73,18 @@ jobs:
           APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
           APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
+          # Import the Developer ID cert into an unlocked ephemeral keychain so
+          # codesign runs non-interactively, then sign + verify + notarize via
+          # the same scripts/sign-macos.sh used locally.
           echo "$APPLE_CERT_P12" | base64 --decode > cert.p12
           security create-keychain -p ci build.keychain
+          security unlock-keychain -p ci build.keychain
           security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
-          security list-keychains -s build.keychain
-          APP=$(find target/release/bundle/osx -maxdepth 1 -name '*.app')
-          codesign --deep --force --options runtime --timestamp \
-            --sign "Developer ID Application: ${APPLE_TEAM_ID}" "$APP"
-          xcrun notarytool submit "$APP" --apple-id "$APPLE_NOTARY_USER" \
-            --password "$APPLE_NOTARY_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple "$APP"
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          security list-keychains -d user -s build.keychain login.keychain-db
+          xcrun notarytool store-credentials citrate-ci \
+            --apple-id "$APPLE_NOTARY_USER" --password "$APPLE_NOTARY_PASSWORD" --team-id "$APPLE_TEAM_ID"
+          NOTARY_PROFILE=citrate-ci scripts/sign-macos.sh "$(find target/release/bundle/osx -maxdepth 1 -name '*.app')"
 
       - name: Windows sign
         if: runner.os == 'Windows' && env.WINDOWS_CERT_PFX != ''
