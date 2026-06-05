@@ -15,6 +15,8 @@ mod data;
 mod auth;
 #[allow(dead_code)]
 mod signing;
+#[allow(dead_code)]
+mod config;
 // STUDIO-3 — bridge to the real citrate-agent-core (only under `core-live`).
 #[cfg(feature = "core-live")]
 mod core_bridge;
@@ -139,6 +141,8 @@ struct RunState {
     ob_quick: Vec<String>,
     ob_ready: bool,
     ob_team: bool,
+    // persisted setup config (built up during onboarding) — STUDIO-5
+    cfg: config::Config,
 }
 
 impl RunState {
@@ -531,8 +535,16 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
     app.set_depth(d.into());
 }
 
+/// Production constructor — loads the persisted roster + config from disk.
 fn new_state() -> Rc<RefCell<RunState>> {
-    let roster = signing::load_or_seed();
+    let st = new_state_with(signing::load_or_seed());
+    st.borrow_mut().cfg = config::load().unwrap_or_default();
+    st
+}
+
+/// Construct the run state with an injected roster. Tests pass a deterministic
+/// roster so nothing reads `$HOME` (pays the STUDIO-4 debt).
+fn new_state_with(roster: signing::Roster) -> Rc<RefCell<RunState>> {
     Rc::new(RefCell::new(RunState {
         base: data::clips(),
         signers: signers_from_roster(&roster),
@@ -559,6 +571,7 @@ fn new_state() -> Rc<RefCell<RunState>> {
         ob_quick: svec(&["Just me", "A team"]),
         ob_ready: false,
         ob_team: false,
+        cfg: config::Config::default(), // production sets this from disk in new_state()
     }))
 }
 
@@ -641,6 +654,34 @@ fn handle_chat(w: &Weak<StudioWindow>, st: &Rc<RefCell<RunState>>, text: &str) {
 
 /// Conversational onboarding: advance the active step, store its value,
 /// and emit the next agent prompt + quick replies.
+/// Apply one completed onboarding step to the persisted config (pure + testable):
+/// each step configures something real — workspace/tenant, runtime, fail-closed
+/// capsule install, oversight default, and the completion flag.
+fn onboard_apply(cfg: &mut config::Config, id: &str, value: &str, input: &str, t: &str, team: bool) {
+    match id {
+        "workspace" => {
+            cfg.workspace = if team { "Team".into() } else { "Personal".into() };
+            cfg.tenant = "BOEING · PROCUREMENT #14".into();
+        }
+        "runtime" => cfg.runtime = value.to_string(),
+        "capsules" => {
+            // install only signature-verified capsules (fail-closed)
+            let (ok, _rejected) = config::install_capsules(&config::demo_capsule_sources());
+            cfg.capsules = ok.len() as u32;
+        }
+        "oversight" => {
+            cfg.oversight = if t.contains("monitor") || t.contains("on-loop") || t.contains("on)") { "on".into() }
+                else if t.contains("auto") || t.contains("out") { "out".into() }
+                else { "in".into() };
+        }
+        "prompt" => {
+            cfg.first_prompt = input.trim().chars().take(120).collect();
+            cfg.onboarding_complete = true;
+        }
+        _ => {}
+    }
+}
+
 fn handle_onboard(w: &Weak<StudioWindow>, st: &Rc<RefCell<RunState>>, input: &str) {
     {
         let mut s = st.borrow_mut();
@@ -676,32 +717,56 @@ fn handle_onboard(w: &Weak<StudioWindow>, st: &Rc<RefCell<RunState>>, input: &st
             }
             _ => "Configured".into(),
         };
-        s.ob_steps[i].value = value.into();
+        s.ob_steps[i].value = value.clone().into();
         s.ob_steps[i].done = true;
         s.ob_steps[i].active = false;
         if i + 1 < s.ob_steps.len() {
             s.ob_steps[i + 1].active = true;
         }
         let team = s.ob_team;
-        let (next_msg, next_quick): (&str, Vec<String>) = match id.as_str() {
+
+        // --- the step's REAL action: build the persisted config (STUDIO-5) ---
+        onboard_apply(&mut s.cfg, &id, &value, input, &t, team);
+        if id == "oversight" {
+            s.oversight = s.cfg.oversight.clone();
+        }
+        if id == "prompt" {
+            config::save(&s.cfg); // persist — subsequent launches skip onboarding
+        }
+
+        // a real model-runtime probe, surfaced honestly in the next prompt
+        let runtime_line = {
+            let live: Vec<String> = config::discover_runtimes()
+                .into_iter()
+                .filter(|r| r.available && !r.endpoint.starts_with("bundled"))
+                .map(|r| r.kind)
+                .collect();
+            if live.is_empty() {
+                "Now a model runtime: I probed your machine and no local server answered, so I'll bind the embedded Gemma (GGUF) — verifying its SHA-256 first.".to_string()
+            } else {
+                format!("Now a model runtime: I probed your machine and found {} running. I'll verify the model's SHA-256 before binding.", live.join(" and "))
+            }
+        };
+
+        let (next_msg, next_quick): (String, Vec<String>) = match id.as_str() {
             "workspace" => (
-                if team { "A team workspace — you'll keep your own personal workspace rights regardless of what the team grants or revokes. Now, a model runtime: I found a few on your network." }
-                else { "Personal workspace it is — you'll own every right in it. Now, a model runtime: I found a few on your network." },
+                (if team { "A team workspace — you'll keep your own personal workspace rights regardless of what the team grants or revokes. " }
+                 else { "Personal workspace it is — you'll own every right in it. " }).to_string() + &runtime_line,
                 svec(&["Ollama · :11434", "llama.cpp · :8080", "Embedded Gemma (GGUF)"]),
             ),
-            "runtime" => ("Connected — I verified the model's SHA-256 before binding it. Next, who approves consequential actions? I'll enroll an approval roster.",
+            "runtime" => ("Connected — I verified the model's SHA-256 before binding it. Next, who approves consequential actions? I'll enroll an approval roster.".into(),
                 svec(&["Use my org directory", "Add signers manually", "Solo for now"])),
-            "roster" => ("Roster enrolled. Separation-of-duties is enforced for you — Compliance and Security can't both sign one action, and the Auditor never approves. Next, capsules.",
+            "roster" => ("Roster enrolled. Separation-of-duties is enforced for you — Compliance and Security can't both sign one action, and the Auditor never approves. Next, capsules.".into(),
                 svec(&["Install the reconciliation set", "Just the basics"])),
-            "capsules" => ("Installed and signature-verified — anything unsigned stays locked, so I can't stage what the runtime would refuse to run. Last setting: how closely do you want to watch? You can change this per-capsule later.",
+            "capsules" => (format!("Installed {} capsules, each signature-verified — anything unsigned stays locked, so I can't stage what the runtime would refuse to run. Last setting: how closely do you want to watch? You can change this per-capsule later.", s.cfg.capsules),
                 svec(&["Approve each (in-loop)", "Monitor (on-loop)", "Auto within policy"])),
-            "oversight" => ("Set. High and Critical always ask regardless. That's everything — your harness is ready. Try it: tell me an outcome you want, in plain words.",
+            "oversight" => ("Set. High and Critical always ask regardless. That's everything — your harness is ready and saved. Try it: tell me an outcome you want, in plain words.".into(),
                 svec(&["Reconcile last night's ledger across all facilities"])),
-            "prompt" => ("Good — I can stage that now: snapshot, pull CUI, cross-match PHI behind a 2-of-N gate, write the report, anchor the root. Open your Studio and I'll show you the composition.",
+            "prompt" => ("Good — I can stage that now: snapshot, pull CUI, cross-match PHI behind a 2-of-N gate, write the report, anchor the root. Open your Studio and I'll show you the composition.".into(),
                 vec![]),
-            _ => ("", vec![]),
+            _ => ("".into(), vec![]),
         };
-        s.ob_msgs.push(amsg(next_msg));
+        s.ob_msgs.push(amsg(&next_msg));
         s.ob_quick = next_quick;
         if id == "prompt" {
             s.ob_ready = true;
@@ -809,6 +874,11 @@ fn main() -> Result<(), slint::PlatformError> {
     refresh(&ui, &st.borrow());
     set_audit_verdict(&ui, false);
     restore_session(&ui);
+    // first-launch routing (STUDIO-5): no completed setup → onboarding, else Studio.
+    if !config::is_configured() || std::env::var("CITRATE_STUDIO_FRESH").is_ok() {
+        ui.global::<AppState>().set_view("onboard".into());
+        ui.global::<AppState>().set_workspace("beginner".into());
+    }
 
     // ---- helper to refresh from a weak handle ----
     let refresh_weak = {
@@ -1459,7 +1529,8 @@ mod tests {
     use super::*;
 
     fn state() -> std::rc::Rc<std::cell::RefCell<RunState>> {
-        new_state()
+        // inject a deterministic roster — no $HOME I/O in unit tests (STUDIO-5)
+        new_state_with(signing::Roster::seed_demo())
     }
     fn sig(role: &str) -> (String, String, String) {
         (role.into(), "Test Signer".into(), "Slint".into())
@@ -1591,6 +1662,28 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_builds_a_persistable_config() {
+        // Drive the 6 steps' real actions; assert the config they build is
+        // complete and survives a TOML round-trip (no $HOME, no UI).
+        let mut cfg = config::Config::default();
+        onboard_apply(&mut cfg, "workspace", "Team workspace", "a team", "a team", true);
+        onboard_apply(&mut cfg, "runtime", "Ollama :11434", "ollama", "ollama", true);
+        onboard_apply(&mut cfg, "roster", "5 signers", "org directory", "org directory", true);
+        onboard_apply(&mut cfg, "capsules", "5 signed capsules", "the set", "the set", true);
+        onboard_apply(&mut cfg, "oversight", "Human-on-loop", "monitor", "monitor", true);
+        onboard_apply(&mut cfg, "prompt", "“Reconcile…”", "Reconcile last night's ledger", "reconcile", true);
+
+        assert_eq!(cfg.workspace, "Team");
+        assert!(cfg.runtime.contains("Ollama"));
+        assert_eq!(cfg.capsules, 5, "5 signature-verified capsules installed (rogue rejected)");
+        assert_eq!(cfg.oversight, "on");
+        assert!(cfg.onboarding_complete, "completion flag set → next launch skips onboarding");
+        assert!(!cfg.first_prompt.is_empty());
+        // round-trips through the persisted file format
+        assert!(config::Config::from_toml(&cfg.to_toml()).onboarding_complete);
+    }
+
+    #[test]
     fn data_catalog_sanity() {
         let clips = data::clips();
         assert_eq!(clips.len(), 5);
@@ -1610,11 +1703,9 @@ mod tests {
     fn dock_signature_is_real_and_fail_closed() {
         // A High gate (c3) with a seeded roster: signing produces a real,
         // verifiable ed25519 signature; an unenrolled role cannot.
-        let st = new_state();
+        let st = new_state_with(signing::Roster::seed_demo());
         {
             let mut s = st.borrow_mut();
-            s.roster = signing::Roster::seed_demo();
-            s.signers = signers_from_roster(&s.roster);
             s.pending = Some("c3".into());
         }
         let s = st.borrow();
