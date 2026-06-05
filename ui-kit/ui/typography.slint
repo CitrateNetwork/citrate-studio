@@ -1,0 +1,77 @@
+// =============================================================
+// Citrate Studio — typography + the selectable-text fix
+//
+// The defining requirement: text must be HIGHLIGHTABLE and
+// COPYABLE — the thing other Citrate Slint apps got wrong. A plain
+// Slint `Text` cannot be selected. So content text is rendered with
+// `SelectableText`, a read-only `TextInput`: read-only blocks edits
+// but still allows mouse selection + Ctrl/Cmd-C copy.
+//
+// Rule of thumb used across the kit:
+//   • data the user would copy (hashes, DIDs, outputs, code, names,
+//     addresses, paragraphs) -> SelectableText
+//   • structural/clickable labels (eyebrows, button text, titles on
+//     a clickable row) -> Label (plain Text), so the click lands.
+// =============================================================
+import { Theme } from "theme.slint";
+
+// The core: a read-only TextInput styled to look like a label but
+// fully selectable + copyable. Single-line by default; set `wrap`
+// and give it a width for multi-line paragraphs.
+export component SelectableText inherits TextInput {
+    read-only: true;
+    single-line: true;
+    enabled: true;                         // selection works while read-only
+    color: Theme.fg-1;
+    font-family: Theme.font-sans;
+    font-size: Theme.t-sm;
+    font-weight: 400;
+    selection-background-color: Theme.citrate-yellow;
+    selection-foreground-color: Theme.ink;
+    // a tasteful I-beam region; the yellow selection matches
+    // `::selection { background: var(--citrate-yellow) }` in the web kit.
+}
+
+// Plain, non-selectable label — used for structural/clickable text.
+export component Label inherits Text {
+    color: Theme.fg-1;
+    font-family: Theme.font-sans;
+    font-size: Theme.t-sm;
+    vertical-alignment: center;
+}
+
+// UPPERCASE mono eyebrow (compliance-form signature). Not selectable
+// by design — it is chrome, not content.
+export component Eyebrow inherits Text {
+    color: Theme.fg-3;
+    font-family: Theme.font-mono;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 1.2px;
+    // Slint has no text-transform; callers pass already-uppercased text.
+}
+
+// Display title (Space Grotesk, tight tracking) — selectable content.
+export component Title inherits SelectableText {
+    font-family: Theme.font-display;
+    color: Theme.ink;
+    font-weight: 500;
+    font-size: Theme.t-xl;
+    letter-spacing: -0.4px;
+}
+
+// Mono data text (hashes, addresses, DIDs) — selectable, muted.
+export component Mono inherits SelectableText {
+    font-family: Theme.font-mono;
+    color: Theme.fg-3;
+    font-size: Theme.t-2xs;
+}
+
+// Editorial italic (empty-state prose) — Cormorant.
+export component Editorial inherits Text {
+    font-family: Theme.font-editorial;
+    font-italic: true;
+    color: Theme.fg-2;
+    font-size: 19px;
+    vertical-alignment: center;
+}

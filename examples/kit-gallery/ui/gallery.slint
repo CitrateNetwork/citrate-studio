@@ -1,0 +1,26 @@
+// A second shell consuming the shared kit purely via @citrate-ui-kit.
+import "../../../ui-kit/assets/fonts/Geist.ttf";
+import "../../../ui-kit/assets/fonts/GeistMono.ttf";
+import "../../../ui-kit/assets/fonts/SpaceGrotesk.ttf";
+import { Theme, Title, Eyebrow, Btn, RiskBadge, DataChip, AppIcon } from "@citrate-ui-kit";
+
+export component Gallery inherits Window {
+    title: "Citrate UI Kit — gallery";
+    background: Theme.paper-pure;
+    preferred-width: 520px;
+    preferred-height: 220px;
+    VerticalLayout {
+        padding: 26px;
+        spacing: 16px;
+        Title { text: "Citrate UI Kit"; }
+        Eyebrow { text: "SHARED · citrate-studio-ui-kit"; }
+        HorizontalLayout {
+            spacing: 12px;
+            Btn { text: "Primary"; kind: "primary"; }
+            Btn { text: "Ghost"; kind: "ghost"; }
+            RiskBadge { tier: "high"; }
+            DataChip { cls: "PHI"; }
+            AppIcon { name: "shield"; size: 22px; tint: Theme.citrate-green-dark; }
+        }
+    }
+}

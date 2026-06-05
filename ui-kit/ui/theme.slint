@@ -1,0 +1,151 @@
+// =============================================================
+// Citrate Studio — design tokens (1:1 with tokens.css + studio.css)
+// The single source of truth for color, type, spacing, radii,
+// motion. Component .slint files reference Theme.* only — never a
+// hardcoded hex, exactly like the web kit's `var(--*)` rule.
+// =============================================================
+
+export global Theme {
+    // ---------- BRAND ----------
+    out property <color> citrate-green: #8ecc09;
+    out property <color> citrate-green-deep: #5a8205;
+    out property <color> citrate-green-dark: #2f4502;
+    out property <color> citrate-green-tint: #e8f3c6;
+
+    out property <color> citrate-yellow: #ffbd10;
+    out property <color> citrate-yellow-deep: #c89400;
+    out property <color> citrate-yellow-dark: #6e5100;
+    out property <color> citrate-yellow-tint: #fff1c4;
+
+    // ---------- INK (warm near-blacks) ----------
+    out property <color> ink: #0e0f0c;
+    out property <color> ink-2: #1f221d;
+    out property <color> graphite: #3a3d36;
+
+    // ---------- STONE (warm neutrals) ----------
+    out property <color> stone-900: #2a2c27;
+    out property <color> stone-700: #555851;
+    out property <color> stone-500: #84867f;
+    out property <color> stone-400: #a5a79f;
+    out property <color> stone-300: #c3c4be;
+    out property <color> stone-200: #d9dad4;
+    out property <color> stone-150: #e3e2dc;
+    out property <color> stone-100: #ecebe4;
+    out property <color> stone-50: #f1efe8;
+
+    // ---------- PAPER (warm surfaces, editable zone) ----------
+    out property <color> paper: #f4f1ea;
+    out property <color> paper-2: #faf8f3;
+    out property <color> paper-pure: #ffffff;
+
+    // ---------- DEPTH ----------
+    out property <color> deep-evergreen: #0f2a1a;
+    out property <color> deep-evergreen-2: #1a3b27;
+
+    // ---------- SEMANTIC ----------
+    out property <color> success: #4f8a05;
+    out property <color> success-bg: #ecf5d4;
+    out property <color> warning: #b07b00;
+    out property <color> warning-bg: #fff1c4;
+    out property <color> danger: #a72414;
+    out property <color> danger-bg: #f6e1de;
+    out property <color> info: #1b4965;
+    out property <color> info-bg: #dbe7ef;
+
+    // ---------- FG / BG aliases ----------
+    out property <color> fg-1: root.ink;
+    out property <color> fg-2: root.stone-700;
+    out property <color> fg-3: root.stone-500;
+    out property <color> fg-accent: root.citrate-green-deep;
+
+    out property <color> border-1: root.stone-200;   // hairlines, table cells
+    out property <color> border-2: root.stone-300;   // form fields, dividers
+    out property <color> border-strong: root.ink;
+
+    // ---------- RISK-TIER SYSTEM (RiskTier: low|medium|high|critical) ----------
+    out property <color> risk-low: root.citrate-green;
+    out property <color> risk-low-deep: root.citrate-green-deep;
+    out property <color> risk-low-tint: root.citrate-green-tint;
+    out property <color> risk-medium: root.citrate-yellow;
+    out property <color> risk-medium-deep: root.warning;
+    out property <color> risk-medium-tint: root.citrate-yellow-tint;
+    out property <color> risk-high: #b07b00;
+    out property <color> risk-high-deep: #8a5e00;
+    out property <color> risk-high-tint: #f3e7c4;
+    out property <color> risk-critical: root.danger;
+    out property <color> risk-critical-deep: #7a1a10;
+    out property <color> risk-critical-tint: root.danger-bg;
+
+    // ---------- SEALED-LEDGER ZONE (evergreen, permanent record) ----------
+    out property <color> sealed-bg: #0c2216;
+    out property <color> sealed-bg-2: #0f2a1a;
+    out property <color> sealed-surface: #123524;
+    out property <color> sealed-bg-hard: #07140c;
+    out property <color> sealed-border: #2a3f33;     // ~ rgba(205,231,214,.14) flattened on sealed-bg
+    out property <color> sealed-border-2: #36503f;   // ~ rgba(205,231,214,.22)
+    out property <color> sealed-fg: #cde7d6;
+    out property <color> sealed-fg-2: #8fae99;       // ~ .62 alpha
+    out property <color> sealed-fg-3: #5f7a68;       // ~ .40 alpha
+    out property <color> sealed-hover: #15311f;
+    out property <color> sealed-tint-green: #14361f; // ~ rgba(142,204,9,.08) on sealed-bg
+
+    // ---------- TYPE FAMILIES ----------
+    out property <string> font-display: "Space Grotesk";
+    out property <string> font-sans: "Geist";
+    out property <string> font-mono: "Geist Mono";
+    out property <string> font-editorial: "Cormorant";
+
+    // ---------- TYPE SCALE ----------
+    out property <length> t-3xs: 11px;
+    out property <length> t-2xs: 12px;
+    out property <length> t-xs: 13px;
+    out property <length> t-sm: 14px;
+    out property <length> t-md: 16px;
+    out property <length> t-lg: 18px;
+    out property <length> t-xl: 22px;
+    out property <length> t-2xl: 28px;
+    out property <length> t-3xl: 36px;
+    out property <length> t-4xl: 48px;
+
+    // ---------- SPACING (8pt grid) ----------
+    out property <length> s-1: 4px;
+    out property <length> s-2: 8px;
+    out property <length> s-3: 12px;
+    out property <length> s-4: 16px;
+    out property <length> s-5: 20px;
+    out property <length> s-6: 24px;
+    out property <length> s-7: 32px;
+    out property <length> s-8: 40px;
+    out property <length> s-9: 48px;
+    out property <length> s-10: 64px;
+
+    // ---------- RADII ----------
+    out property <length> r-0: 0px;
+    out property <length> r-1: 6px;
+    out property <length> r-2: 8px;
+    out property <length> r-3: 12px;
+    out property <length> r-pill: 999px;
+
+    // ---------- ELEVATION (used by Card/Lift helpers) ----------
+    out property <color> shadow-soft: #0e0f0c2e;     // rgba(14,15,12,.18)-ish for drop shadows
+    out property <color> focus-ring: #8ecc0959;      // rgba(142,204,9,.35)
+
+    // ---------- MOTION ----------
+    out property <duration> dur-fast: 140ms;
+    out property <duration> dur-base: 220ms;
+    out property <duration> dur-slow: 420ms;
+    out property <duration> dur-narrative: 900ms;
+
+    // ---------- LETTER SPACING ----------
+    out property <length> tr-eyebrow: 1.4px;   // ~0.14em at ~10px (approximation; Slint uses absolute)
+    out property <length> tr-caps: 0.6px;
+}
+
+// Reduced-motion + density flags live on a settable global so the
+// whole tree can react (mirrors the prototype's data-* attributes).
+export global Settings {
+    in-out property <bool> reduced-motion: false;
+    in-out property <string> density: "cinematic";       // cinematic | compact
+    in-out property <string> keyframe-style: "filled";   // filled | outlined
+    in-out property <string> zone-contrast: "standard";  // subtle | standard | hard
+}

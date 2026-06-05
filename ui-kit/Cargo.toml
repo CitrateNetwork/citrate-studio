@@ -1,0 +1,11 @@
+[package]
+name = "citrate-studio-ui-kit"
+version = "0.1.0"
+edition = "2021"
+authors = ["Citrate Network"]
+license = "BUSL-1.1"
+description = "Shared Slint UI kit for Citrate native apps (theme, typography, icons, primitives, fonts) — Slint 1.16. Carries its own .slint + fonts; consumers register ui/lib.slint as the @citrate-ui-kit library."
+
+# Propagate `cargo:UI_KIT=...` to dependents as DEP_CITRATE_STUDIO_UI_KIT_UI_KIT.
+links = "citrate_studio_ui_kit"
+include = ["src/**", "ui/**", "assets/**", "build.rs", "Cargo.toml"]

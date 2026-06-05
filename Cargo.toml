@@ -1,3 +1,6 @@
+[workspace]
+members = ["ui-kit", "examples/kit-gallery"]
+
 [package]
 name = "citrate-studio"
 version = "0.1.0"
@@ -58,6 +61,9 @@ core-live = ["dep:citrate-agent-core", "dep:tokio", "dep:wasmtime"]
 
 [build-dependencies]
 slint-build = "1.16"
+# The shared design-system crate (theme/typography/icons/primitives + fonts).
+# studio's build.rs reads its published @citrate-ui-kit library path.
+citrate-studio-ui-kit = { path = "ui-kit" }
 
 [profile.dev]
 opt-level = 1          # Slint UIs are unbearable at opt-level 0; 1 keeps builds fast and the UI smooth.

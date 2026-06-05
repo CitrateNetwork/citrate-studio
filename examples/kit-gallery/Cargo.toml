@@ -1,0 +1,18 @@
+[package]
+name = "kit-gallery"
+version = "0.0.0"
+edition = "2021"
+license = "BUSL-1.1"
+description = "A second shell that consumes citrate-studio-ui-kit — proves the kit is reusable across apps."
+build = "build.rs"
+
+[[bin]]
+name = "kit-gallery"
+path = "src/main.rs"
+
+[dependencies]
+slint = { version = "1.16", default-features = false, features = ["compat-1-2", "backend-winit", "renderer-software", "std"] }
+
+[build-dependencies]
+slint-build = "1.16"
+citrate-studio-ui-kit = { path = "../../ui-kit" }
