@@ -424,6 +424,48 @@ fn live_sign(s: &mut RunState, clip: &ClipData, payload: &[u8], role: &str) {
     }
 }
 
+/// The dock "Sign" intent — shared by the `on_sign` callback and the e2e harness.
+/// Under `core-live` it routes through the real `ApprovalQueue` (`live_sign`); the
+/// default build signs locally and lets STUDIO-3's policy seam decide.
+fn apply_sign(s: &mut RunState, role: &str) {
+    let clip = match &s.pending {
+        Some(id) => match s.clip(id) {
+            Some(c) => c,
+            None => return,
+        },
+        None => return,
+    };
+    let payload = gate_payload(&clip);
+    #[cfg(feature = "core-live")]
+    {
+        let _ = &payload; // used by live_sign below
+        live_sign(s, &clip, &payload, role);
+    }
+    #[cfg(not(feature = "core-live"))]
+    match s.roster.sign_for(role, &payload) {
+        Ok((_sig, _surface)) => {
+            let name = s.roster.signer_for(role).map(|e| e.name.clone()).unwrap_or_default();
+            s.signatures.push((role.to_string(), name, "Slint".into()));
+            s.sign_error.clear();
+        }
+        Err(e) => s.sign_error = e.to_string(),
+    }
+}
+
+/// The dock "Resume" intent — approve the pending gate and continue the run.
+fn apply_resume(s: &mut RunState) {
+    if let Some(id) = s.pending.take() {
+        s.approved.push(id);
+    }
+    s.signatures.clear();
+    s.sign_error.clear();
+    #[cfg(feature = "core-live")]
+    {
+        s.live_open = None; // gate resolved; the next one opens fresh
+    }
+    s.status = "running".into();
+}
+
 fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
     let pending = match &st.pending {
         Some(id) => match st.clip(id) {
@@ -1128,49 +1170,10 @@ fn main() -> Result<(), slint::PlatformError> {
         s.playhead = (s.playhead - 8.0).max(0.0);
     });
     on0!(on_resume, |st: &Rc<RefCell<RunState>>| {
-        let mut s = st.borrow_mut();
-        if let Some(id) = s.pending.take() {
-            s.approved.push(id);
-        }
-        s.signatures.clear();
-        s.sign_error.clear();
-        #[cfg(feature = "core-live")]
-        {
-            s.live_open = None; // gate resolved; the next one opens fresh
-        }
-        s.status = "running".into();
+        apply_resume(&mut st.borrow_mut());
     });
     on!(on_sign, |st: &Rc<RefCell<RunState>>, role: &SharedString| {
-        let mut s = st.borrow_mut();
-        let role = role.to_string();
-        // The pending capsule + the artifact being approved (its payload hash).
-        let clip = match &s.pending {
-            Some(id) => match s.clip(id) {
-                Some(c) => c,
-                None => return,
-            },
-            None => return,
-        };
-        let payload = gate_payload(&clip);
-
-        // core-live: route the signature through the REAL async ApprovalQueue —
-        // the runtime verifies the attestation, authorizes the signer (RM-G.1),
-        // enforces SoD, and decides quorum. Default: the local roster signs and
-        // STUDIO-3's policy seam decides (same Quorum::satisfied_by math).
-        #[cfg(feature = "core-live")]
-        live_sign(&mut s, &clip, &payload, &role);
-
-        #[cfg(not(feature = "core-live"))]
-        match s.roster.sign_for(&role, &payload) {
-            Ok((_sig, _surface)) => {
-                let name = s.roster.signer_for(&role).map(|e| e.name.clone()).unwrap_or_default();
-                // `Slint` is the SigningSurfaceTag (the native signing surface);
-                // the key-storage surface lives on the roster entry.
-                s.signatures.push((role, name, "Slint".into()));
-                s.sign_error.clear();
-            }
-            Err(e) => s.sign_error = e.to_string(),
-        }
+        apply_sign(&mut st.borrow_mut(), &role.to_string());
     });
     on!(on_medium_approve, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
         let mut s = st.borrow_mut();
@@ -1891,6 +1894,77 @@ mod tests {
         live_sign(&mut s, &c3, &payload, "ComplianceOfficer");
         assert_eq!(s.signatures.len(), 2);
         assert!(s.quorum_met(), "High gate satisfied through the real ApprovalQueue");
+    }
+
+    #[test]
+    fn e2e_gate_sign_resume_audit_loop() {
+        // Headless end-to-end: build a real StudioWindow, drive the operator loop
+        // through the SAME intent code the UI runs (apply_sign / apply_resume) +
+        // the real refresh→AppState bridge, and assert every transition. Closes the
+        // test-harness gap the STUDIO-1 retro flagged. Runs under both feature builds.
+        use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+        use slint::platform::{Platform, WindowAdapter};
+        struct P {
+            w: std::rc::Rc<MinimalSoftwareWindow>,
+        }
+        impl Platform for P {
+            fn create_window_adapter(&self) -> Result<std::rc::Rc<dyn WindowAdapter>, slint::PlatformError> {
+                Ok(self.w.clone())
+            }
+        }
+        let win = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        let _ = slint::platform::set_platform(Box::new(P { w: win.clone() }));
+        win.set_size(slint::PhysicalSize::new(1360, 880));
+
+        let ui = StudioWindow::new().expect("headless window");
+        seed_catalog(&ui);
+        let st = new_state_with(signing::Roster::seed_demo());
+        refresh(&ui, &st.borrow());
+        let app = ui.global::<AppState>();
+
+        // PLAY → drive the state machine to the High gate (c3).
+        st.borrow_mut().status = "running".into();
+        for _ in 0..600 {
+            if st.borrow().status != "running" {
+                break;
+            }
+            st.borrow_mut().tick();
+        }
+        refresh(&ui, &st.borrow());
+        assert_eq!(st.borrow().status, "paused", "paused at the high gate");
+        assert_eq!(st.borrow().pending.as_deref(), Some("c3"));
+        assert!(!app.get_quorum_met(), "not yet signed");
+
+        // SIGN → two enrolled roles to quorum, through the real sign intent.
+        apply_sign(&mut st.borrow_mut(), "Reviewer");
+        refresh(&ui, &st.borrow());
+        assert!(!app.get_quorum_met(), "1 of 2");
+        apply_sign(&mut st.borrow_mut(), "ComplianceOfficer");
+        refresh(&ui, &st.borrow());
+        assert!(app.get_quorum_met(), "quorum met → AppState reflects it");
+
+        // RESUME → the gate is approved and the run continues.
+        apply_resume(&mut st.borrow_mut());
+        refresh(&ui, &st.borrow());
+        assert_eq!(st.borrow().status, "running");
+        assert!(st.borrow().approved.contains(&"c3".to_string()));
+
+        // RUN TO DONE.
+        for _ in 0..600 {
+            if st.borrow().status != "running" {
+                break;
+            }
+            st.borrow_mut().tick();
+        }
+        refresh(&ui, &st.borrow());
+        assert_eq!(st.borrow().status, "done", "run completes");
+
+        // AUDIT → the sealed ledger verifies the completed run.
+        let frames: Vec<(u64, String, String)> = data::frames()
+            .iter()
+            .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
+            .collect();
+        assert!(audit_verify::verify(&frames, false).ok, "audit chain verifies the run");
     }
 
     #[test]
