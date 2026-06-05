@@ -116,6 +116,50 @@ impl RunState {
         self.auto.clear();
         self.trip_fired = false;
     }
+
+    /// Advance the run by one playback tick (assumes `status == "running"`).
+    /// Extracted from the timer closure so the run state machine — gate
+    /// pause, medium-queue / auto-feed crossings, tripwire fire, completion —
+    /// is unit-testable. Mirrors shell.jsx's loop.
+    fn tick(&mut self) {
+        let prev = self.playhead;
+        let mut next = prev + SPEED;
+        let base = self.base.clone();
+        // gate pause (high/critical)
+        for c in &base {
+            if (c.gate == "high" || c.gate == "critical")
+                && !self.approved.contains(&c.id.to_string())
+            {
+                let cs = c.start as f32;
+                if next >= cs && prev <= cs + 0.001 {
+                    next = cs;
+                    self.status = "paused".into();
+                    self.pending = Some(c.id.to_string());
+                    self.signatures.clear();
+                    break;
+                }
+            }
+        }
+        // side-effects on crossing boundaries
+        for c in &base {
+            let cs = c.start as f32;
+            let ce = (c.start + c.dur) as f32;
+            if c.gate == "medium" && prev < cs && next >= cs && !self.medium.contains(&c.id.to_string()) {
+                self.medium.push(c.id.to_string());
+            }
+            if c.gate == "auto" && prev < ce && next >= ce && !self.auto.contains(&c.name.to_string()) {
+                self.auto.push(c.name.to_string());
+            }
+        }
+        if !self.trip_fired && next >= 22.0 {
+            self.trip_fired = true;
+        }
+        if next >= UNITS_TOTAL {
+            next = UNITS_TOTAL;
+            self.status = "done".into();
+        }
+        self.playhead = next;
+    }
 }
 
 fn vm<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
@@ -966,43 +1010,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     if s.status != "running" {
                         return;
                     }
-                    let prev = s.playhead;
-                    let mut next = prev + SPEED;
-                    let base = s.base.clone();
-                    // gate pause (high/critical)
-                    for c in &base {
-                        if (c.gate == "high" || c.gate == "critical")
-                            && !s.approved.contains(&c.id.to_string())
-                        {
-                            let cs = c.start as f32;
-                            if next >= cs && prev <= cs + 0.001 {
-                                next = cs;
-                                s.status = "paused".into();
-                                s.pending = Some(c.id.to_string());
-                                s.signatures.clear();
-                                break;
-                            }
-                        }
-                    }
-                    // side-effects on crossing boundaries
-                    for c in &base {
-                        let cs = c.start as f32;
-                        let ce = (c.start + c.dur) as f32;
-                        if c.gate == "medium" && prev < cs && next >= cs && !s.medium.contains(&c.id.to_string()) {
-                            s.medium.push(c.id.to_string());
-                        }
-                        if c.gate == "auto" && prev < ce && next >= ce && !s.auto.contains(&c.name.to_string()) {
-                            s.auto.push(c.name.to_string());
-                        }
-                    }
-                    if !s.trip_fired && next >= 22.0 {
-                        s.trip_fired = true;
-                    }
-                    if next >= UNITS_TOTAL {
-                        next = UNITS_TOTAL;
-                        s.status = "done".into();
-                    }
-                    s.playhead = next;
+                    s.tick();
                 }
                 if let Some(ui) = w.upgrade() {
                     refresh(&ui, &st.borrow());
@@ -1147,3 +1155,123 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
     Ok(())
 }
 
+
+// =============================================================
+// Tests — STUDIO-1 run state machine + STUDIO-3 policy seam.
+// Backfill (2026-06-04): repays STUDIO-1's acknowledged test debt and
+// covers STUDIO-3's policy. The `policy::*` tests guard the parity
+// between the default hand-rolled rules and the real core (core-live):
+// both feature builds must pass these identically.
+// =============================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state() -> std::rc::Rc<std::cell::RefCell<RunState>> {
+        new_state()
+    }
+    fn sig(role: &str) -> (String, String, String) {
+        (role.into(), "Test Signer".into(), "Slint".into())
+    }
+
+    #[test]
+    fn tick_pauses_at_high_gate_with_side_effects() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        // c1 (auto 0–8) completed, c2 (medium @8) entered, c3 (high @18) gates.
+        assert_eq!(s.status, "paused");
+        assert_eq!(s.pending.as_deref(), Some("c3"));
+        assert_eq!(s.playhead, 18.0, "pauses exactly at the gate start");
+        assert!(s.medium.iter().any(|x| x == "c2"), "medium card queued");
+        assert!(s.auto.iter().any(|x| x == "recon.snapshot"), "auto-approved feed");
+        assert!(!s.trip_fired, "tripwire (>=22) not reached before the gate");
+        assert!(s.signatures.is_empty());
+    }
+
+    #[test]
+    fn tick_runs_to_completion_when_gate_pre_approved() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.approved.push("c3".into()); // skip the high gate
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        assert_eq!(s.status, "done");
+        assert_eq!(s.playhead, UNITS_TOTAL);
+        assert!(s.trip_fired, "TRIP-AU-002 fires past unit 22");
+        assert!(s.auto.iter().any(|x| x == "recon.snapshot"));
+        assert!(s.auto.iter().any(|x| x == "recon.anchor-merkle"));
+    }
+
+    #[test]
+    fn quorum_met_needs_two_signatures_for_high() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.pending = Some("c3".into());
+        assert!(!s.quorum_met(), "0/2");
+        s.signatures.push(sig("Reviewer"));
+        assert!(!s.quorum_met(), "1/2");
+        s.signatures.push(sig("ComplianceOfficer"));
+        assert!(s.quorum_met(), "2/2");
+    }
+
+    #[test]
+    fn approval_roster_enforces_separation_of_duties() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.pending = Some("c3".into());
+        s.signatures.push(sig("SecurityOfficer"));
+        let rows = approval_roster(&s);
+        let row = |role: &str| rows.iter().find(|r| r.role == role).cloned().unwrap();
+
+        assert!(row("SecurityOfficer").signed);
+        let co = row("ComplianceOfficer");
+        assert!(co.disabled, "CO disabled once SO has signed");
+        assert!(co.reason.starts_with("SoD"), "reason: {}", co.reason);
+        let rv = row("Reviewer");
+        assert!(!rv.signed && !rv.disabled, "Reviewer still free to sign");
+    }
+
+    #[test]
+    fn policy_rules_match_the_runtime() {
+        // SoD: CO ⊥ SO (symmetric); nothing else conflicts.
+        assert!(policy::is_conflict("ComplianceOfficer", "SecurityOfficer"));
+        assert!(policy::is_conflict("SecurityOfficer", "ComplianceOfficer"));
+        assert!(!policy::is_conflict("Reviewer", "ComplianceOfficer"));
+        // Auditor never approves; everyone else may.
+        assert!(!policy::can_approve("Auditor"));
+        assert!(policy::can_approve("Reviewer"));
+        assert!(policy::can_approve("SecurityOfficer"));
+        // Quorum::for_tier counts.
+        assert_eq!(policy::quorum_n("low", &[]), 0);
+        assert_eq!(policy::quorum_n("medium", &[]), 1);
+        assert_eq!(policy::quorum_n("high", &[]), 2);
+        assert_eq!(policy::quorum_n("critical", &[]), 3);
+    }
+
+    #[test]
+    fn data_catalog_sanity() {
+        let clips = data::clips();
+        assert_eq!(clips.len(), 5);
+        let c3 = clips.iter().find(|c| c.id == "c3").unwrap();
+        assert_eq!(c3.risk, "high");
+        assert_eq!(c3.quorum_n, 2);
+        assert_eq!(c3.quorum_roles.iter().count(), 3);
+        assert_eq!(data::tools_chain().len(), 11);
+        assert_eq!(data::tools_code().len(), 6);
+        assert_eq!(data::doctor().len(), 11);
+        assert_eq!(data::tripwires().len(), 9);
+        assert_eq!(data::signers().len(), 5);
+    }
+}
