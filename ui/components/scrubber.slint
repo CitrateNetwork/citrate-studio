@@ -34,8 +34,10 @@ component Frame inherits Rectangle {
     in property <FrameData> f;
     in property <int> idx;
     property <bool> active: AppState.scrubber-active == idx;
-    property <bool> tampered: AppState.scrubber-tampered && idx >= 6;
-    property <bool> broken-link: AppState.scrubber-tampered && idx == 5;
+    // a frame is downstream of the break the core reported; the broken link
+    // sits on the frame just before it.
+    property <bool> tampered: AppState.scrubber-break-seq >= 0 && idx >= AppState.scrubber-break-seq;
+    property <bool> broken-link: AppState.scrubber-break-seq >= 0 && idx == AppState.scrubber-break-seq - 1;
     width: 78px;
     VerticalLayout {
         padding-top: 26px;
@@ -116,19 +118,19 @@ export component AuditScrubber inherits Rectangle {
                 HorizontalLayout {
                     spacing: 6px;
                     AppIcon {
-                        name: AppState.scrubber-tampered ? "alert" : "check";
-                        size: 13px; stroke-weight: AppState.scrubber-tampered ? 1.5 : 2;
-                        tint: AppState.scrubber-tampered ? Theme.danger : Theme.citrate-green;
+                        name: AppState.scrubber-ok ? "check" : "alert";
+                        size: 13px; stroke-weight: AppState.scrubber-ok ? 2 : 1.5;
+                        tint: AppState.scrubber-ok ? Theme.citrate-green : Theme.danger;
                         y: (parent.height - self.height)/2;
                     }
                     Text {
-                        text: AppState.scrubber-tampered ? "previous_hash break at seq 6: chain tampered" : ("verify_integrity() ok · " + AppState.frames.length + " frames");
+                        text: AppState.scrubber-verdict;
                         font-family: Theme.font-mono; font-size: 10.5px; letter-spacing: 0.4px;
-                        color: AppState.scrubber-tampered ? Theme.danger : Theme.citrate-green;
+                        color: AppState.scrubber-ok ? Theme.citrate-green : Theme.danger;
                         vertical-alignment: center;
                     }
                 }
-                Btn { text: AppState.scrubber-tampered ? "Restore" : "Simulate tamper"; kind: "ghost-dark"; sm: true; clicked => { AppState.scrubber-tampered = !AppState.scrubber-tampered; } }
+                Btn { text: AppState.scrubber-ok ? "Simulate tamper" : "Restore"; kind: "ghost-dark"; sm: true; clicked => { AppState.toggle-tamper(); } }
                 Btn { text: "Export"; icon: "download"; kind: "ghost-dark"; sm: true; }
                 IconButton { icon: "chevdown"; tint: Theme.sealed-fg-2; on-dark: true; clicked => { AppState.sealed-collapsed = true; } }
             }
@@ -161,7 +163,7 @@ export component AuditScrubber inherits Rectangle {
                         Rectangle { height: 8px; }
                         SealedKV { k: "event_type"; v: root.af.evt; }
                         SealedKV { k: "actor"; v: root.af.actor; mono: true; }
-                        SealedKV { k: "previous_hash"; v: (AppState.scrubber-tampered && root.af.seq >= 6) ? "✗ mismatch" : "0x" + (root.af.seq * 7 + 19) + "c1…ae"; mono: true; danger: AppState.scrubber-tampered && root.af.seq >= 6; }
+                        SealedKV { k: "previous_hash"; v: (AppState.scrubber-break-seq >= 0 && root.af.seq >= AppState.scrubber-break-seq) ? "✗ mismatch" : "0x" + (root.af.seq * 7 + 19) + "c1…ae"; mono: true; danger: AppState.scrubber-break-seq >= 0 && root.af.seq >= AppState.scrubber-break-seq; }
                         SealedKV { k: "chain_anchor"; v: root.af.anchor == "" ? "— pending" : root.af.anchor; accent: root.af.anchor != ""; }
                     }
                     VerticalLayout {

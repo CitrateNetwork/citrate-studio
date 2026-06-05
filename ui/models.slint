@@ -165,6 +165,12 @@ export global AppState {
     in-out property <int> ttl: 3600;
     in-out property <bool> scrubber-tampered: false;
     in-out property <int> scrubber-active: 6;
+    // audit-chain verdict — computed by the core (real AuditChain::verify_integrity
+    // under core-live; modeled otherwise). break-seq = -1 when the chain verifies.
+    in property <string> scrubber-verdict: "verify_integrity() ok";
+    in property <bool> scrubber-ok: true;
+    in property <int> scrubber-break-seq: -1;
+    callback toggle-tamper();
 
     // ---- intents (UI submits; core decides) ----
     callback play();

@@ -47,6 +47,39 @@ mod policy {
     pub use crate::core_bridge::policy::{can_approve, is_conflict, quorum_n};
 }
 
+/// Audit-chain verification seam. The scrubber's verdict (verify ok / count,
+/// or the broken-link sequence on tamper) comes from here: the default build
+/// models it; `core-live` runs the real `AuditChain::verify_integrity` over a
+/// real in-memory chain built from the frames (see core_bridge::audit). Both
+/// must agree — the parity test guards it.
+mod audit_verify {
+    #[derive(Clone)]
+    pub struct Verdict {
+        pub ok: bool,
+        pub message: String, // carries the verified frame count when ok
+        pub break_seq: i32,  // frame sequence where the chain breaks; -1 = clean
+    }
+    #[cfg(not(feature = "core-live"))]
+    pub fn verify(frames: &[(u64, String, String)], tampered: bool) -> Verdict {
+        if tampered {
+            Verdict {
+                ok: false,
+                message: "previous_hash break at sequence 6: chain tampered".into(),
+                break_seq: 6,
+            }
+        } else {
+            let n = frames.len();
+            Verdict {
+                ok: true,
+                message: format!("verify_integrity() ok · {n} frames"),
+                break_seq: -1,
+            }
+        }
+    }
+    #[cfg(feature = "core-live")]
+    pub use crate::core_bridge::audit::verify;
+}
+
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -580,6 +613,20 @@ fn handle_onboard(w: &Weak<StudioWindow>, st: &Rc<RefCell<RunState>>, input: &st
     }
 }
 
+/// Recompute the Audit Scrubber verdict through the seam (real
+/// `AuditChain::verify_integrity` under `core-live`) and push it to the UI.
+fn set_audit_verdict(ui: &StudioWindow, tampered: bool) {
+    let frames: Vec<(u64, String, String)> = data::frames()
+        .iter()
+        .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
+        .collect();
+    let v = audit_verify::verify(&frames, tampered);
+    let app = ui.global::<AppState>();
+    app.set_scrubber_verdict(v.message.into());
+    app.set_scrubber_ok(v.ok);
+    app.set_scrubber_break_seq(v.break_seq);
+}
+
 fn seed_catalog(ui: &StudioWindow) {
     let app = ui.global::<AppState>();
     app.set_tools_chain(vm(data::tools_chain()));
@@ -627,6 +674,7 @@ fn main() -> Result<(), slint::PlatformError> {
     seed_catalog(&ui);
     let st = new_state();
     refresh(&ui, &st.borrow());
+    set_audit_verdict(&ui, false);
 
     // ---- helper to refresh from a weak handle ----
     let refresh_weak = {
@@ -857,6 +905,18 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     app.on_ttl_fmt(|s| format!("{}:{:02}", s / 60, s % 60).into());
+
+    // audit scrubber — recompute the real verify_integrity verdict on toggle
+    {
+        let w = ui.as_weak();
+        app.on_toggle_tamper(move || {
+            if let Some(ui) = w.upgrade() {
+                let tampered = !ui.global::<AppState>().get_scrubber_tampered();
+                ui.global::<AppState>().set_scrubber_tampered(tampered);
+                set_audit_verdict(&ui, tampered);
+            }
+        });
+    }
 
     // ---- chat ----
     {
@@ -1126,6 +1186,7 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
         }
     }
     refresh(&ui, &st.borrow());
+    set_audit_verdict(&ui, std::env::var("CITRATE_STUDIO_TAMPER").is_ok());
 
     // Render. Two passes so layout settles before the captured frame.
     let mut buf = vec![PremultipliedRgbaColor::default(); (w * h) as usize];
@@ -1258,6 +1319,28 @@ mod tests {
         assert_eq!(policy::quorum_n("medium", &[]), 1);
         assert_eq!(policy::quorum_n("high", &[]), 2);
         assert_eq!(policy::quorum_n("critical", &[]), 3);
+    }
+
+    #[test]
+    fn audit_verify_clean_and_tampered() {
+        // Same assertions pass under the default (modeled) and `core-live`
+        // (real AuditChain::verify_integrity) builds — the parity guard.
+        let frames: Vec<(u64, String, String)> = data::frames()
+            .iter()
+            .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
+            .collect();
+        assert_eq!(frames.len(), 12);
+
+        let ok = audit_verify::verify(&frames, false);
+        assert!(ok.ok, "clean chain verifies");
+        assert!(ok.message.contains("12 frames"), "12 verified frames");
+        assert_eq!(ok.break_seq, -1);
+        assert!(ok.message.contains("ok"));
+
+        let bad = audit_verify::verify(&frames, true);
+        assert!(!bad.ok, "tamper detected");
+        assert_eq!(bad.break_seq, 6, "broken link at sequence 6");
+        assert!(bad.message.contains("sequence 6"), "message: {}", bad.message);
     }
 
     #[test]

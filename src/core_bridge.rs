@@ -72,3 +72,112 @@ pub mod policy {
         }
     }
 }
+
+/// Real audit-chain integrity verification (STUDIO-3 step 5).
+///
+/// The studio Audit Scrubber holds a past run's frames in memory; this builds
+/// a real `AuditChain` from them (an in-memory sink + the minted genesis) and
+/// runs the runtime's own `AuditChain::verify_integrity`. The "Simulate tamper"
+/// affordance genuinely corrupts a record's payload so the hash chain breaks —
+/// and the verdict + break sequence are exactly what the runtime reports, not a
+/// canned string.
+pub mod audit {
+    use crate::audit_verify::Verdict;
+    use citrate_agent_core::audit::record::{AuditRecord, EventType};
+    use citrate_agent_core::audit::{AuditChain, AuditSink, GenesisInfo};
+    use citrate_agent_core::error::AgentError;
+    use std::sync::{Arc, Mutex};
+
+    /// In-memory `AuditSink` — same contract as `FilesystemSink`, no disk.
+    struct MemSink {
+        records: Mutex<Vec<AuditRecord>>,
+    }
+    impl MemSink {
+        fn new() -> Self {
+            Self { records: Mutex::new(Vec::new()) }
+        }
+    }
+    impl AuditSink for MemSink {
+        fn append(&self, record: &AuditRecord) -> Result<(), AgentError> {
+            self.records.lock().unwrap().push(record.clone());
+            Ok(())
+        }
+        fn iter(
+            &self,
+        ) -> Result<Box<dyn Iterator<Item = Result<AuditRecord, AgentError>> + '_>, AgentError> {
+            let snapshot = self.records.lock().unwrap().clone();
+            Ok(Box::new(snapshot.into_iter().map(Ok)))
+        }
+    }
+
+    fn event_type(evt: &str) -> EventType {
+        use EventType::*;
+        match evt {
+            "Genesis" => Genesis,
+            "Proposal" => Proposal,
+            "Edit" => Edit,
+            "Approval" => Approval,
+            "Rejection" => Rejection,
+            "Submission" => Submission,
+            "Confirmation" => Confirmation,
+            "BreakGlass" => BreakGlass,
+            "BreakGlassAffirmation" => BreakGlassAffirmation,
+            "DoctorReport" => DoctorReport,
+            "AuditExport" => AuditExport,
+            "Resumption" => Resumption,
+            _ => Edit,
+        }
+    }
+
+    fn err_verdict(msg: &str) -> Verdict {
+        // Pull the sequence out of "...break at sequence N: ..." for the UI.
+        let break_seq = msg
+            .split("sequence ")
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
+        Verdict { ok: false, message: msg.to_string(), break_seq }
+    }
+
+    /// Build a real `AuditChain` from `(seq, event, actor)` frames and run the
+    /// real `verify_integrity`. `tampered` corrupts a record so the chain
+    /// genuinely breaks.
+    pub fn verify(frames: &[(u64, String, String)], tampered: bool) -> Verdict {
+        let sink = Arc::new(MemSink::new());
+        let sink_dyn: Arc<dyn AuditSink> = sink.clone();
+        let genesis = GenesisInfo {
+            agent_did: "did:citrate:core".into(),
+            harness_version: "citrate-studio".into(),
+            policy_bundle_hash: [0u8; 32],
+            doctor_report_hash: [0u8; 32],
+        };
+        let mut chain = match AuditChain::open_or_init(sink_dyn, genesis, 0) {
+            Ok(c) => c,
+            Err(e) => return err_verdict(&e.to_string()),
+        };
+        // open_or_init minted frame 0 (Genesis); append the rest as their events.
+        for (_, evt, actor) in frames.iter().skip(1) {
+            if let Err(e) =
+                chain.append(event_type(evt), evt.as_bytes().to_vec(), actor.clone(), Vec::new(), None, 0)
+            {
+                return err_verdict(&e.to_string());
+            }
+        }
+        // Corrupt the record just before the break point so verify trips at seq 6.
+        if tampered {
+            let mut recs = sink.records.lock().unwrap();
+            if recs.len() > 5 {
+                recs[5].payload = b"TAMPERED".to_vec();
+            }
+        }
+        match chain.verify_integrity() {
+            Ok(count) => Verdict {
+                ok: true,
+                message: format!("verify_integrity() ok · {count} frames"),
+                break_seq: -1,
+            },
+            Err(e) => err_verdict(&e.to_string()),
+        }
+    }
+}
