@@ -57,7 +57,6 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
 | Signed `.cps` dispatch (drop the dev opt-in) | upstream | CIT-AGENT-3e packer |
 | L0 first-prompt agent loop | upstream | CIT-AGENT-3 |
 | Signed/notarized installers | ship | Apple + Windows code-signing certs (CI secrets) |
-| UI-kit extracted + consumed by another shell | ship | `gui-native` to exist; a cross-crate Slint refactor |
 | External Tier-1 audit attestation | ship | the federation auditor (`AUDIT_TIER.md`) |
 
 None of these is unknown or hidden — each is named with what gates it. The codebase is a
