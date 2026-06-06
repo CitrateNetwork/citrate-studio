@@ -189,6 +189,22 @@ component RosterSection inherits VerticalLayout {
         wrap: word-wrap; single-line: false; font-size: 13px; color: Theme.fg-2; width: 600px;
     }
     Rectangle { height: 14px; }
+    // Insecure-storage warning: a FileBacked signer keeps its private key on disk (audit F-3).
+    if AppState.roster-insecure: Rectangle {
+        border-radius: Theme.r-1; border-width: 1px; border-color: Theme.danger;
+        background: Theme.danger.with-alpha(0.07);
+        height: warnrow.preferred-height + 16px;
+        warnrow := HorizontalLayout {
+            padding: 8px; spacing: 8px;
+            AppIcon { name: "alert"; size: 14px; tint: Theme.danger; y: (parent.height - self.height)/2; }
+            SelectableText {
+                text: "Insecure key storage: a FileBacked signer keeps its private key on disk (dev only). Re-enroll on Keyring or attested hardware for production.";
+                font-size: 11.5px; color: Theme.danger; wrap: word-wrap; single-line: false;
+                vertical-alignment: center; horizontal-stretch: 1;
+            }
+        }
+    }
+    if AppState.roster-insecure: Rectangle { height: 12px; }
     Rectangle {
         border-width: 1px; border-color: Theme.border-1; border-radius: Theme.r-2; clip: true;
         height: list.preferred-height;

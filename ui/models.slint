@@ -210,6 +210,7 @@ export global AppState {
 
     // ---- signer roster (STUDIO-4: real ed25519 enrollment) ----
     in property <[RosterRow]> roster-rows;
+    in property <bool> roster-insecure;  // any enrolled signer is FileBacked (plaintext key)
     callback enroll-signer(string, string);  // role, surface (FileBacked | Keyring)
     callback disenroll-signer(string);        // role
 

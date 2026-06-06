@@ -58,6 +58,11 @@ wasmtime = { version = "45", features = ["component-model"], optional = true }
 
 [features]
 core-live = ["dep:citrate-agent-core", "dep:tokio", "dep:wasmtime"]
+# Demo/screenshot build: auto-seed a FileBacked signer roster on first run and persist its
+# private keys to roster.json, so the approval flow works out of the box without keychain
+# prompts. NEVER enable in a shipping build (audit F-3) — production seeds nothing and stores
+# no plaintext key on disk.
+dev-filebacked = []
 
 [build-dependencies]
 slint-build = "1.16"

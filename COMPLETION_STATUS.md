@@ -11,8 +11,10 @@ Legend: ✅ real · 🟡 modeled (default) / real (core-live) · ⏳ remaining �
 
 ### 1. Sign in — ✅
 OIDC + SIWE against `citrate-identity` via the native loopback-PKCE flow (RFC 8252).
-Real token exchange, TLS-trusted ID token (OIDC §3.1.3.7), keyring storage, refresh,
-logout, a session chip + KYC badge. *(STUDIO-2)*
+Real token exchange, TLS-trusted ID token (OIDC §3.1.3.7 — the JWKS-skip is enforced to be
+sound: release builds require an `https://` issuer, a plaintext loopback issuer is debug-only
+and loudly logged; `aud` is validated by membership with `azp` for multi-audience tokens),
+keyring storage, refresh, logout, a session chip + KYC badge. *(STUDIO-2, STUDIO-16)*
 
 ### 2. Stand up the harness — ✅
 Onboarding configures real, persisted state in `citrate-studio.toml`: a real model-runtime
