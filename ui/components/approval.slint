@@ -4,7 +4,9 @@
 //   Low → auto (silent feed) · Medium → one ambient card
 //   High → quorum card w/ live signatures + SoD · Critical → modal
 // The UI never computes "approved": it submits add_signature and
-// renders the verdict the core returns. SoD is computed by the core.
+// renders the verdict the policy seam returns. SoD / dedup / no-self-approval
+// are enforced in Rust (the real core under core-live; admit_signature mirrors
+// it in the default build), never by this view layer.
 // =============================================================
 import { Theme } from "../theme.slint";
 import { ScrollView } from "std-widgets.slint";

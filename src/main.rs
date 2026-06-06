@@ -437,9 +437,44 @@ fn live_sign(s: &mut RunState, clip: &ClipData, payload: &[u8], role: &str) {
     }
 }
 
+/// Signature-admission rules the runtime's `ApprovalQueue::add_signature` enforces, mirrored
+/// for the default build (STUDIO-15 / audit F-1). Under `core-live` the real async queue
+/// rejects an inadmissible signature before it can count; the default build had no equivalent
+/// — `apply_sign` pushed any role the UI allowed, leaving SoD / dedup / no-self-approval to the
+/// view layer (`approval_roster`'s `disabled` flag). This makes the *policy seam*, not the
+/// render layer, the thing that rejects: feed it a CO+SO pair or a double-sign and it refuses,
+/// matching what the real queue does. The error strings match `approval_roster`'s reasons so
+/// the UI surfaces an identical message however the signature was submitted.
+#[cfg(not(feature = "core-live"))]
+fn admit_signature(s: &RunState, role: &str) -> Result<(), String> {
+    if !s.roster.authorized(role) {
+        return Err("No signer enrolled (fail-closed)".into());
+    }
+    // The proposer (Operator) cannot approve their own action.
+    if role == "Operator" {
+        return Err("Proposer can't self-approve".into());
+    }
+    // Auditor (and any future non-approving role) never counts.
+    if !policy::can_approve(role) {
+        return Err("Auditor never approves".into());
+    }
+    let signed: Vec<&str> = s.signatures.iter().map(|x| x.0.as_str()).collect();
+    // No double-signing: one signature per signer (the runtime dedups by signer_id).
+    if signed.contains(&role) {
+        return Err("Already signed".into());
+    }
+    // Separation-of-duties: reject a role that conflicts with one already signed.
+    if signed.iter().any(|sr| policy::is_conflict(role, sr)) {
+        return Err("SoD · CO ⊥ SO".into());
+    }
+    Ok(())
+}
+
 /// The dock "Sign" intent — shared by the `on_sign` callback and the e2e harness.
 /// Under `core-live` it routes through the real `ApprovalQueue` (`live_sign`); the
-/// default build signs locally and lets STUDIO-3's policy seam decide.
+/// default build signs locally but first runs `admit_signature` (the policy seam's
+/// mirror of `add_signature`), so SoD / dedup / no-self-approval are enforced in Rust,
+/// not by the UI — then STUDIO-3's `policy::quorum_satisfied` decides the gate.
 fn apply_sign(s: &mut RunState, role: &str) {
     let clip = match &s.pending {
         Some(id) => match s.clip(id) {
@@ -455,13 +490,19 @@ fn apply_sign(s: &mut RunState, role: &str) {
         live_sign(s, &clip, &payload, role);
     }
     #[cfg(not(feature = "core-live"))]
-    match s.roster.sign_for(role, &payload) {
-        Ok((_sig, _surface)) => {
-            let name = s.roster.signer_for(role).map(|e| e.name.clone()).unwrap_or_default();
-            s.signatures.push((role.to_string(), name, "Slint".into()));
-            s.sign_error.clear();
+    {
+        if let Err(e) = admit_signature(s, role) {
+            s.sign_error = e;
+            return;
         }
-        Err(e) => s.sign_error = e.to_string(),
+        match s.roster.sign_for(role, &payload) {
+            Ok((_sig, _surface)) => {
+                let name = s.roster.signer_for(role).map(|e| e.name.clone()).unwrap_or_default();
+                s.signatures.push((role.to_string(), name, "Slint".into()));
+                s.sign_error.clear();
+            }
+            Err(e) => s.sign_error = e.to_string(),
+        }
     }
 }
 
@@ -501,7 +542,15 @@ fn dispatch_completions(s: &mut RunState) {
 }
 
 /// The dock "Resume" intent — approve the pending gate and continue the run.
+/// Fail-closed on the core's decision (STUDIO-15 / audit F-1): the gate advances only when
+/// `quorum_met()` (→ `policy::quorum_satisfied`, the real core under `core-live`) returns
+/// true. Previously this advanced unconditionally and relied on the UI hiding the Resume
+/// button until quorum; now the decision is re-checked here, so no caller can advance a gate
+/// the core hasn't approved.
 fn apply_resume(s: &mut RunState) {
+    if s.pending.is_some() && !s.quorum_met() {
+        return; // quorum not satisfied — the core has not approved; do not advance.
+    }
     if let Some(id) = s.pending.take() {
         s.approved.push(id);
     }
@@ -1296,7 +1345,7 @@ fn main() -> Result<(), slint::PlatformError> {
         apply_resume(&mut st.borrow_mut());
     });
     on!(on_sign, |st: &Rc<RefCell<RunState>>, role: &SharedString| {
-        apply_sign(&mut st.borrow_mut(), &role.to_string());
+        apply_sign(&mut st.borrow_mut(), role.as_ref());
     });
     on!(on_medium_approve, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
         let mut s = st.borrow_mut();
@@ -2198,5 +2247,71 @@ mod tests {
         let rows = approval_roster(&st.borrow());
         let rv = rows.iter().find(|r| r.role == "Reviewer").unwrap();
         assert!(rv.disabled && rv.reason.contains("No signer enrolled"));
+    }
+
+    // ---- STUDIO-15 / audit F-1: the policy seam (not the UI) enforces admission ----
+
+    #[cfg(not(feature = "core-live"))]
+    #[test]
+    fn default_build_seam_rejects_sod_double_sign_and_self_approval() {
+        // The default build must refuse an inadmissible signature at the seam
+        // (admit_signature), matching the runtime's ApprovalQueue::add_signature —
+        // not merely hide the button. Drive everything through the real `apply_sign`
+        // intent so we test the path the UI uses.
+        let st = new_state_with(signing::Roster::seed_demo());
+        let mut s = st.borrow_mut();
+        s.pending = Some("c3".into()); // High gate; required roles {Reviewer, CO, SO}
+
+        apply_sign(&mut s, "SecurityOfficer");
+        assert_eq!(s.signatures.len(), 1, "SO admitted");
+
+        // SoD: CO conflicts with the signed SO → rejected at the seam.
+        apply_sign(&mut s, "ComplianceOfficer");
+        assert_eq!(s.signatures.len(), 1, "CO+SO rejected by the seam, not just the UI");
+        assert!(s.sign_error.starts_with("SoD"), "reason: {}", s.sign_error);
+
+        // No double-signing.
+        apply_sign(&mut s, "SecurityOfficer");
+        assert_eq!(s.signatures.len(), 1, "double-sign rejected");
+        assert_eq!(s.sign_error, "Already signed");
+
+        // Proposer (Operator) cannot self-approve.
+        apply_sign(&mut s, "Operator");
+        assert_eq!(s.signatures.len(), 1);
+        assert!(s.sign_error.starts_with("Proposer"), "reason: {}", s.sign_error);
+
+        // Auditor never approves.
+        apply_sign(&mut s, "Auditor");
+        assert_eq!(s.signatures.len(), 1);
+        assert!(s.sign_error.starts_with("Auditor"), "reason: {}", s.sign_error);
+
+        // A non-conflicting second signer still reaches quorum (Reviewer + SO).
+        apply_sign(&mut s, "Reviewer");
+        assert_eq!(s.signatures.len(), 2);
+        assert!(s.quorum_met(), "Reviewer + SO satisfies High without an SoD violation");
+    }
+
+    #[cfg(not(feature = "core-live"))]
+    #[test]
+    fn apply_resume_is_a_noop_until_quorum_met() {
+        // The gate advances only on the core's decision, regardless of caller.
+        let st = new_state_with(signing::Roster::seed_demo());
+        let mut s = st.borrow_mut();
+        s.pending = Some("c3".into());
+        s.status = "paused".into();
+
+        // No signatures → quorum not met → resume must not advance the gate.
+        apply_resume(&mut s);
+        assert_eq!(s.pending.as_deref(), Some("c3"), "gate not advanced without quorum");
+        assert_eq!(s.status, "paused");
+        assert!(!s.approved.contains(&"c3".to_string()));
+
+        // Reach quorum through the real sign intent, then resume advances.
+        apply_sign(&mut s, "Reviewer");
+        apply_sign(&mut s, "ComplianceOfficer");
+        assert!(s.quorum_met());
+        apply_resume(&mut s);
+        assert_eq!(s.status, "running");
+        assert!(s.approved.contains(&"c3".to_string()));
     }
 }

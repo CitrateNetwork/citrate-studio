@@ -118,6 +118,7 @@ pub fn tools_code() -> Vec<ToolData> {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capsule(name: &str, version: &str, risk: &str, caps: &[&str], signing: &str, verified: bool, dc: &str, hash: &str) -> CapsuleData {
     CapsuleData {
         name: name.into(), version: version.into(), risk: risk.into(),
