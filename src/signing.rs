@@ -200,16 +200,33 @@ impl Roster {
     }
 
     // ---- persistence ----
+    /// Production serializer — pubkey / role / signer_id / surface / wallet only, NEVER a
+    /// private key (audit F-3: no plaintext secret on disk in a shipping build). Keyring
+    /// secrets live in the OS keyring; a FileBacked secret is simply not persisted in
+    /// production (the Settings banner warns when one is in use).
     pub fn to_json(&self) -> String {
+        self.to_json_impl(false)
+    }
+
+    /// Dev/test serializer that also persists FileBacked secrets, so the demo seed survives a
+    /// restart and round-trip tests can sign. Compiled only for tests / the `dev-filebacked`
+    /// demo build — never reachable from a shipping binary.
+    #[cfg(any(test, feature = "dev-filebacked"))]
+    pub fn to_json_with_secrets(&self) -> String {
+        self.to_json_impl(true)
+    }
+
+    fn to_json_impl(&self, include_secrets: bool) -> String {
         let arr: Vec<serde_json::Value> = self
             .signers
             .iter()
             .map(|s| {
+                let secret = if include_secrets { s.secret.map(|sk| to_hex(&sk)) } else { None };
                 serde_json::json!({
                     "role": s.role,
                     "name": s.name,
                     "pubkey": to_hex(&s.pubkey),
-                    "secret": s.secret.map(|sk| to_hex(&sk)),
+                    "secret": secret,
                     "signer_id": s.signer_id,
                     "surface": s.surface,
                     "wallet": s.wallet,
@@ -258,8 +275,10 @@ impl Roster {
         Some(Roster::from_json(&std::fs::read_to_string(path).ok()?))
     }
 
-    /// Seed the five demo signers with real generated FileBacked keypairs, so
-    /// the approval flow works with real crypto out of the box.
+    /// Seed the five demo signers with real generated FileBacked keypairs, so the approval
+    /// flow works with real crypto out of the box. Dev/test only (audit F-3): a shipping build
+    /// seeds nothing — see `load_or_seed`.
+    #[cfg(any(test, feature = "dev-filebacked"))]
     pub fn seed_demo() -> Roster {
         let mut r = Roster::default();
         for (role, name) in [
@@ -298,7 +317,10 @@ pub fn roster_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("roster.json"))
 }
 
-/// Load the persisted roster, or seed + persist the demo roster on first run.
+/// Load the persisted roster. On first run a shipping build seeds **nothing** — High/Critical
+/// actions fail closed until the operator enrolls signers (onto Keyring) deliberately
+/// (audit F-3 / planset Q1). The `dev-filebacked` demo build seeds + persists a FileBacked
+/// roster so screenshots/demos work without keychain prompts.
 pub fn load_or_seed() -> Roster {
     if let Some(p) = roster_path() {
         if let Some(r) = Roster::load_from(&p) {
@@ -306,11 +328,26 @@ pub fn load_or_seed() -> Roster {
                 return r;
             }
         }
-        let r = Roster::seed_demo();
-        let _ = r.save_to(&p);
-        return r;
+        #[cfg(feature = "dev-filebacked")]
+        {
+            let r = Roster::seed_demo();
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&p, r.to_json_with_secrets());
+            return r;
+        }
+        #[cfg(not(feature = "dev-filebacked"))]
+        return Roster::default(); // fail-closed: no auto-seeded keys in a shipping build.
     }
-    Roster::seed_demo()
+    #[cfg(feature = "dev-filebacked")]
+    {
+        Roster::seed_demo()
+    }
+    #[cfg(not(feature = "dev-filebacked"))]
+    {
+        Roster::default()
+    }
 }
 
 #[cfg(test)]
@@ -376,7 +413,8 @@ mod tests {
     fn roster_persist_roundtrip() {
         let mut r = Roster::seed_demo();
         assert_eq!(r.signers.len(), 5);
-        let json = r.to_json();
+        // The dev/test serializer keeps secrets so a FileBacked signer survives the round-trip.
+        let json = r.to_json_with_secrets();
         let back = Roster::from_json(&json);
         assert_eq!(back.signers.len(), 5);
         // a seeded FileBacked signer can still sign after a round-trip
@@ -385,7 +423,19 @@ mod tests {
         assert!(verify(&pk, b"p", &sig));
         // disenroll persists
         r.disenroll("Auditor");
-        assert_eq!(Roster::from_json(&r.to_json()).signers.len(), 4);
+        assert_eq!(Roster::from_json(&r.to_json_with_secrets()).signers.len(), 4);
+    }
+
+    #[test]
+    fn production_to_json_never_writes_a_secret() {
+        // audit F-3: the production serializer (used by save_to / persist_roster) must never
+        // put a private key on disk, even for FileBacked signers.
+        let r = Roster::seed_demo(); // 5 FileBacked signers, each with a secret in memory
+        let json = r.to_json();
+        assert!(!json.contains("\"secret\":\""), "no private key value in production JSON");
+        let back = Roster::from_json(&json);
+        assert_eq!(back.signers.len(), 5, "pubkey/role/id still persist");
+        assert!(back.signers.iter().all(|s| s.secret.is_none()), "no secret survives production serialization");
     }
 
     #[test]

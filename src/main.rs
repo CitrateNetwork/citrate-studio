@@ -690,6 +690,7 @@ fn refresh(ui: &StudioWindow, st: &RunState) {
     );
     app.set_quorum_met(st.quorum_met());
     app.set_approval_roster(vm(approval_roster(st)));
+    app.set_roster_insecure(st.roster.signers.iter().any(|s| s.surface == "FileBacked"));
     app.set_sign_error(st.sign_error.clone().into());
     app.set_signers(vm(st.signers.clone())); // reflects the live enrolled roster
     app.set_roster_rows(vm(roster_rows(st)));
@@ -1139,7 +1140,13 @@ fn restore_session(ui: &StudioWindow) {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&s.wallet).into());
         app.set_kyc_status(s.kyc.into());
-    } else if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
+        return;
+    }
+    // Dev-only: a CITRATE_STUDIO_SIGNEDIN seed fakes a session for screenshots/dev. A release
+    // build never honors it (audit F-5) — auth identity is display-only, but a shipped binary
+    // must not fabricate an authenticated state from an env var.
+    #[cfg(debug_assertions)]
+    if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&w).into());
         app.set_kyc_status(std::env::var("CITRATE_STUDIO_KYC").unwrap_or_default().into());
@@ -1879,6 +1886,7 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
     if std::env::var("CITRATE_STUDIO_CHAIN").is_ok() {
         set_chain_status(&ui, chain::status()); // opt-in live probe for shots
     }
+    #[cfg(debug_assertions)]
     if let Ok(w) = std::env::var("CITRATE_STUDIO_SIGNEDIN") {
         let app = ui.global::<AppState>();
         app.set_signed_in(true);
