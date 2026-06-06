@@ -1,0 +1,54 @@
+# STUDIO-19 / audit F-7: actually run the supply-chain gate in CI.
+# Before this, deny.toml/audit.toml *documented* a merge-blocking gate that nothing
+# executed. cargo-audit reads Cargo.lock directly (no source fetch) and is the always-on
+# hard gate; cargo-deny needs the full dep graph (cargo metadata), which pulls the optional
+# core-live SSH source, so it runs with the org deploy key when available.
+name: supply-chain
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  cargo-audit:
+    name: cargo audit (advisory gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      # The single documented ignore (RUSTSEC-2025-0055) lives in audit.toml; pass it
+      # explicitly so an ad-hoc run matches CI. Unmaintained advisories are non-failing
+      # warnings for cargo-audit.
+      - name: cargo audit
+        run: cargo audit --ignore RUSTSEC-2025-0055
+
+  cargo-deny:
+    name: cargo deny (licenses + advisories + bans + sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH for the chain monorepo source
+        # cargo-deny runs `cargo metadata`, which resolves the optional core-live SSH dep.
+        # Provide the org deploy key + the `github-citrate-chain` host alias used in Cargo.lock.
+        env:
+          DEPLOY_KEY: ${{ secrets.CITRATE_CHAIN_DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::CITRATE_CHAIN_DEPLOY_KEY is required for cargo-deny (core-live SSH source)"; exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<'EOF'
+          Host github-citrate-chain
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/id_ed25519
+          EOF
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny check
+        run: cargo deny check

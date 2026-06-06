@@ -27,6 +27,15 @@ allow = [
     "MPL-2.0",
     "CC0-1.0",
     "OpenSSL",
+    # STUDIO-19 / audit F-7 (surfaced by actually running cargo-deny):
+    "BUSL-1.1",  # the project's own license (citrate-studio + ui-kit + kit-gallery)
+    "BSL-1.0",   # Boost Software License — permissive; via clipboard-win / error-code
+    "CDLA-Permissive-2.0", # Community Data License Agreement — permissive (transitive)
+    "NCSA",      # University of Illinois/NCSA — permissive, BSD-style (transitive)
+    # Slint is tri-licensed (GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
+    # LicenseRef-Slint-Software-3.0). We ship under the Slint Software 3.0 license — NOT GPL
+    # (which would conflict with BUSL-1.1). Allowing this LicenseRef records that basis.
+    "LicenseRef-Slint-Software-3.0",
 ]
 
 # Explicit denies — block specific dependencies even if their license
@@ -67,10 +76,10 @@ license-files = [
 #   advisory blocks merges until triaged or explicitly ignored below
 #   with rationale.
 yanked = "deny"
-unmaintained = "deny"
-notice = "deny"
-# `vulnerability` removed in cargo-deny 0.14+ — vulnerabilities
-# are always denied unless explicitly ignored below.
+# cargo-deny 0.16+ schema: `unmaintained` is a scope enum (all|workspace|transitive|none),
+# not "deny"/"warn"; "all" checks every crate. `notice`/`unsound`/`vulnerability` keys were
+# removed — advisories are errors by default and are silenced only via `ignore` below.
+unmaintained = "all"
 #
 # Inline exceptions (each requires a one-line justification):
 ignore = [
@@ -81,6 +90,17 @@ ignore = [
     # citrate-agent-runtime/audit.toml) pending the upstream bump. Full
     # rationale in this repo's audit.toml.
     "RUSTSEC-2025-0055",
+
+    # STUDIO-19 / audit F-7: the 6 transitive UNMAINTAINED advisories below are
+    # informational (cargo-audit treats them as non-failing warnings). With
+    # `unmaintained = "deny"` above, cargo-deny would fail on them, so each is
+    # ignored here with rationale mirroring audit.toml. None is in a trust-bearing
+    # path; re-evaluate when the upstream crate is replaced.
+    "RUSTSEC-2025-0141", # bincode 1.x/2.x unmaintained — via Slint (i-slint-compiler) + sled trees
+    "RUSTSEC-2024-0388", # derivative unmaintained — via keyring→zbus + arkworks (core-live)
+    "RUSTSEC-2024-0384", # instant unmaintained — via keyring→zbus→async-io
+    "RUSTSEC-2024-0436", # paste unmaintained — via image→ravif (Slint) + wasmtime (core-live)
+    "RUSTSEC-2025-0124", # rand_os unmaintained — via bip39→citrate-wallet-core (core-live)
 ]
 
 [bans]
@@ -89,6 +109,9 @@ ignore = [
 # from drifting silently.
 multiple-versions = "warn"
 wildcards = "deny"
+# First-party path deps (e.g. the workspace `citrate-studio-ui-kit`) have no version req and
+# read as wildcards; allow that for path deps only — external wildcards stay denied.
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]
@@ -98,4 +121,8 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# STUDIO-19 / audit F-7: the OPTIONAL `core-live` tree pulls citrate-wallet-core /
+# -execution / -consensus from the org's chain monorepo over SSH, pinned to an
+# immutable rev in Cargo.lock. Allow exactly that source so `cargo deny check`
+# passes deterministically; everything else stays denied.
+allow-git = ["ssh://git@github-citrate-chain/CitrateNetwork/citrate-chain"]

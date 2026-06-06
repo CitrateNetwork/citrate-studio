@@ -48,7 +48,9 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
   integrity) passes the *same* assertions under default and `core-live`.
 - **e2e harness.** Headless gate→sign→resume→done→audit loop, asserted, both builds.
 - **No dead code.** Every `#[allow(dead_code)]` removed or a precise `cfg_attr`; unwraps
-  triaged (7 non-test, all provably safe).
+  triaged — **9 non-test (5 default-build + 4 core-live), all provably safe** (the
+  independent audit §6 corrected the prior undercount of 7; none is reachable with
+  attacker- or network-controlled input).
 - **Full Agentile trail.** 13 sprints, each with spec → tests → code → retro → journal → essay.
 - **UI kit extracted** to `citrate-studio-ui-kit`, consumed by Studio + a second shell,
   pixel-identical *(STUDIO-13)*.

@@ -163,18 +163,45 @@ pub struct CapsuleSource {
     pub publisher: [u8; 32],
 }
 
-/// Verify a capsule's publisher signature over its bytes.
-pub fn verify_capsule(c: &CapsuleSource) -> bool {
-    signing::verify(&c.publisher, &c.bytes, &c.sig)
+/// Pinned publisher keys — the **trust anchor** for capsule installation. A capsule is
+/// accepted only if its publisher key is pinned here AND its signature verifies; a valid
+/// self-signature from an unpinned key is NOT trusted (audit F-6: signature consistency is
+/// integrity, not authenticity). The real `.cps` registry feed (CIT-AGENT-3e) populates this
+/// from a signed source of record; today the demo pins its own generated key.
+#[derive(Debug, Clone, Default)]
+pub struct PublisherTrustStore {
+    pinned: Vec<[u8; 32]>,
+}
+impl PublisherTrustStore {
+    pub fn new() -> Self {
+        Self { pinned: Vec::new() }
+    }
+    pub fn pin(&mut self, pubkey: [u8; 32]) {
+        if !self.pinned.contains(&pubkey) {
+            self.pinned.push(pubkey);
+        }
+    }
+    pub fn is_pinned(&self, pubkey: &[u8; 32]) -> bool {
+        self.pinned.contains(pubkey)
+    }
 }
 
-/// Install only signature-verified capsules. Returns (installed, rejected) —
-/// fail-closed: anything that doesn't verify is rejected, never staged.
-pub fn install_capsules(sources: &[CapsuleSource]) -> (Vec<String>, Vec<String>) {
+/// Verify a capsule against the pinned publisher trust store: the publisher must be pinned
+/// AND the signature must verify over the bytes. Authenticity (pinning) + integrity (sig).
+pub fn verify_capsule(c: &CapsuleSource, trust: &PublisherTrustStore) -> bool {
+    trust.is_pinned(&c.publisher) && signing::verify(&c.publisher, &c.bytes, &c.sig)
+}
+
+/// Install only capsules from a pinned publisher with a valid signature. Returns
+/// (installed, rejected) — fail-closed: anything unpinned or unverified is rejected.
+pub fn install_capsules(
+    sources: &[CapsuleSource],
+    trust: &PublisherTrustStore,
+) -> (Vec<String>, Vec<String>) {
     let mut ok = Vec::new();
     let mut bad = Vec::new();
     for c in sources {
-        if verify_capsule(c) {
+        if verify_capsule(c, trust) {
             ok.push(c.name.clone());
         } else {
             bad.push(c.name.clone());
@@ -183,25 +210,27 @@ pub fn install_capsules(sources: &[CapsuleSource]) -> (Vec<String>, Vec<String>)
     (ok, bad)
 }
 
-/// A demo capsule set: signed by a single publisher key, plus one tampered
-/// capsule whose signature won't verify (to exercise fail-closed). Stands in
-/// for a real registry feed until STUDIO-6.
-pub fn demo_capsule_sources() -> Vec<CapsuleSource> {
+/// A demo capsule set signed by a single publisher key + the trust store that pins it, plus
+/// one tampered capsule whose signature won't verify (to exercise fail-closed). Stands in for
+/// a real signed registry feed until CIT-AGENT-3e.
+pub fn demo_capsule_sources_with_trust() -> (Vec<CapsuleSource>, PublisherTrustStore) {
     let (pub_secret, publisher) = signing::gen_keypair();
+    let mut trust = PublisherTrustStore::new();
+    trust.pin(publisher);
     let mut sources = Vec::new();
     for name in ["recon.snapshot", "recon.pull-cui", "recon.match-phi", "recon.write-report", "recon.anchor-merkle"] {
         let bytes = format!("capsule:{name}").into_bytes();
         let sig = signing::sign(&pub_secret, &bytes);
         sources.push(CapsuleSource { name: name.into(), bytes, sig, publisher });
     }
-    // one unsigned/tampered capsule — must be rejected, fail-closed.
+    // one unsigned/tampered capsule — pinned publisher but invalid signature → rejected.
     sources.push(CapsuleSource {
         name: "rogue.exfiltrate".into(),
         bytes: b"capsule:rogue.exfiltrate".to_vec(),
         sig: [0u8; 64],
         publisher,
     });
-    sources
+    (sources, trust)
 }
 
 #[cfg(test)]
@@ -244,8 +273,8 @@ mod tests {
 
     #[test]
     fn capsule_install_is_fail_closed() {
-        let sources = demo_capsule_sources();
-        let (ok, bad) = install_capsules(&sources);
+        let (sources, trust) = demo_capsule_sources_with_trust();
+        let (ok, bad) = install_capsules(&sources, &trust);
         assert_eq!(ok.len(), 5, "the 5 signed capsules install");
         assert_eq!(bad, vec!["rogue.exfiltrate"], "the unsigned capsule is rejected");
     }
@@ -253,13 +282,28 @@ mod tests {
     #[test]
     fn capsule_verify_rejects_tamper() {
         let (secret, publisher) = signing::gen_keypair();
+        let mut trust = PublisherTrustStore::new();
+        trust.pin(publisher);
         let bytes = b"capsule:recon.snapshot".to_vec();
         let sig = signing::sign(&secret, &bytes);
         let good = CapsuleSource { name: "x".into(), bytes: bytes.clone(), sig, publisher };
-        assert!(verify_capsule(&good));
+        assert!(verify_capsule(&good, &trust));
         // tamper the bytes → verify fails
         let bad = CapsuleSource { name: "x".into(), bytes: b"capsule:rogue".to_vec(), sig, publisher };
-        assert!(!verify_capsule(&bad));
+        assert!(!verify_capsule(&bad, &trust));
+    }
+
+    #[test]
+    fn capsule_verify_rejects_unpinned_publisher() {
+        // audit F-6: a valid self-signature from an UNPINNED key is not trusted.
+        let (secret, publisher) = signing::gen_keypair();
+        let bytes = b"capsule:attacker".to_vec();
+        let sig = signing::sign(&secret, &bytes);
+        let c = CapsuleSource { name: "attacker".into(), bytes, sig, publisher };
+        assert!(!verify_capsule(&c, &PublisherTrustStore::new()), "unpinned publisher rejected");
+        let mut trust = PublisherTrustStore::new();
+        trust.pin(publisher);
+        assert!(verify_capsule(&c, &trust), "pinned publisher with a valid sig accepted");
     }
 
     #[test]
