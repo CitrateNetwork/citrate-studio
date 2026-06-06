@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Citrate Network"]
 license = "BUSL-1.1"
+publish = false  # an application + private UI kit, never published to crates.io (path deps)
 description = "Citrate Studio — the native agent-harness interface (Slint). The forward-looking UI kit for all Citrate native apps."
 repository = "https://github.com/CitrateNetwork/citrate-studio"
 build = "build.rs"
