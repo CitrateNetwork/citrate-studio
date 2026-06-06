@@ -1005,7 +1005,9 @@ fn set_audit_verdict(ui: &StudioWindow, tampered: bool) {
 }
 
 /// Auth client config — `auth.citrate.ai` by default; `CITRATE_STUDIO_ISSUER`
-/// overrides it (e.g. a local `http://localhost:3000` identity server).
+/// overrides it. The issuer scheme is enforced at use (`AuthConfig::validate_issuer`):
+/// release builds require `https://`; a plaintext `http://localhost` issuer is accepted
+/// only in debug builds, and loudly (STUDIO-16 / audit F-2).
 fn auth_config() -> auth::AuthConfig {
     let mut c = auth::AuthConfig::default();
     if let Ok(iss) = std::env::var("CITRATE_STUDIO_ISSUER") {

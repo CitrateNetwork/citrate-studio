@@ -36,6 +36,38 @@ impl Default for AuthConfig {
     }
 }
 
+impl AuthConfig {
+    /// The §3.1.3.7 JWKS-skip is only sound over a TLS-authenticated channel: we trust the
+    /// ID token *because* it arrived directly from the token endpoint over server-validated
+    /// TLS, not because we checked its signature. Enforce that precondition — the issuer must
+    /// be `https://`. A loopback dev issuer (`http://127.0.0.1` / `localhost` / `[::1]`) is
+    /// permitted ONLY in debug builds, and loudly; a release build rejects any non-https
+    /// issuer, fail-closed. (STUDIO-16 / audit F-2.)
+    pub fn validate_issuer(&self) -> Result<(), AuthError> {
+        let iss = self.issuer.trim_end_matches('/');
+        if iss.starts_with("https://") {
+            return Ok(());
+        }
+        #[cfg(debug_assertions)]
+        {
+            let loopback = iss.starts_with("http://127.0.0.1")
+                || iss.starts_with("http://localhost")
+                || iss.starts_with("http://[::1]");
+            if loopback {
+                eprintln!(
+                    "WARN: INSECURE plaintext OIDC issuer {iss} — permitted in debug builds \
+                     only; the ID token is trusted without a TLS-authenticated channel. \
+                     Never ship this."
+                );
+                return Ok(());
+            }
+        }
+        Err(AuthError::Claims(format!(
+            "insecure issuer scheme (must be https): {iss}"
+        )))
+    }
+}
+
 /// A PKCE (RFC 7636) verifier/challenge pair using the S256 method that
 /// `citrate-identity` requires.
 #[derive(Debug, Clone)]
@@ -126,7 +158,8 @@ pub struct Claims {
     pub wallet_address: String, // == the `sub` claim (EIP-55 address)
     pub kyc_status: Option<String>,
     pub iss: String,
-    pub aud: String,
+    pub audiences: Vec<String>,  // all audiences (OIDC `aud` may be string or array)
+    pub azp: Option<String>,     // authorized party — required when multi-audience
     pub exp: i64,
 }
 
@@ -140,20 +173,21 @@ pub fn decode_claims(id_token: &str) -> Option<Claims> {
     let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|x| x.to_string());
-    // `aud` may be a string or an array; take the first.
-    let aud = v
-        .get("aud")
-        .and_then(|a| {
-            a.as_str()
-                .map(|s| s.to_string())
-                .or_else(|| a.as_array().and_then(|arr| arr.first()).and_then(|x| x.as_str()).map(|s| s.to_string()))
-        })
-        .unwrap_or_default();
+    // `aud` may be a string or an array; collect ALL audiences so validation can check
+    // membership (not just the first element) and enforce `azp` for the multi-aud case.
+    let audiences: Vec<String> = match v.get("aud") {
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        Some(serde_json::Value::Array(arr)) => {
+            arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()
+        }
+        _ => Vec::new(),
+    };
     Some(Claims {
         wallet_address: s("wallet_address").or_else(|| s("sub")).unwrap_or_default(),
         kyc_status: s("kyc_status"),
         iss: s("iss").unwrap_or_default(),
-        aud,
+        audiences,
+        azp: s("azp"),
         exp: v.get("exp").and_then(|x| x.as_i64()).unwrap_or(0),
     })
 }
@@ -161,11 +195,22 @@ pub fn decode_claims(id_token: &str) -> Option<Claims> {
 /// Validate the trusted ID-token claims: issuer + audience match our config,
 /// and the token has not expired.
 pub fn validate_claims(c: &Claims, cfg: &AuthConfig, now_unix: i64) -> Result<(), AuthError> {
-    if !cfg.issuer.is_empty() && c.iss != cfg.issuer {
+    // Issuer must be configured and must match — an empty configured issuer is rejected
+    // (no silent skip), so the iss check is always load-bearing. (STUDIO-16 / audit F-2.)
+    if cfg.issuer.is_empty() {
+        return Err(AuthError::Claims("no configured issuer".into()));
+    }
+    if c.iss != cfg.issuer {
         return Err(AuthError::Claims(format!("issuer mismatch: {}", c.iss)));
     }
-    if c.aud != cfg.client_id {
-        return Err(AuthError::Claims(format!("audience mismatch: {}", c.aud)));
+    // Audience: our client_id must be a MEMBER of `aud` (not merely the first element).
+    if !c.audiences.iter().any(|a| a == &cfg.client_id) {
+        return Err(AuthError::Claims(format!("audience mismatch: {:?}", c.audiences)));
+    }
+    // OIDC Core §3.1.3.7: when there are multiple audiences, `azp` MUST be present and equal
+    // our client_id.
+    if c.audiences.len() > 1 && c.azp.as_deref() != Some(cfg.client_id.as_str()) {
+        return Err(AuthError::Claims("multiple audiences without matching azp".into()));
     }
     if c.exp != 0 && c.exp <= now_unix {
         return Err(AuthError::Claims("id_token expired".into()));
@@ -415,6 +460,7 @@ pub fn exchange_code(cfg: &AuthConfig, redirect: &str, code: &str, verifier: &st
 /// code, validate the (TLS-trusted) ID token, and persist the tokens.
 /// Blocking — call off the UI thread.
 pub fn login(base: &AuthConfig, store: &dyn TokenStore) -> Result<AuthSession, AuthError> {
+    base.validate_issuer()?; // fail-closed before opening a browser to a plaintext issuer
     let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| AuthError::Io(e.to_string()))?;
     let port = server
         .server_addr()
@@ -451,6 +497,7 @@ pub fn logout(cfg: &AuthConfig, store: &dyn TokenStore) -> Result<(), AuthError>
 
 /// Exchange the stored refresh token for fresh tokens (rotating refresh).
 pub fn refresh(cfg: &AuthConfig, store: &dyn TokenStore) -> Result<TokenSet, AuthError> {
+    cfg.validate_issuer()?; // never refresh a trusted token over a plaintext channel
     let cur = store.load().ok_or_else(|| AuthError::Token("no stored tokens".into()))?;
     let rt = cur.refresh_token.ok_or_else(|| AuthError::Token("no refresh_token".into()))?;
     let url = format!("{}/token", cfg.issuer.trim_end_matches('/'));
@@ -537,8 +584,57 @@ mod tests {
         assert!(validate_claims(&c, &cfg, 10_000_000_000).is_err());
         // wrong audience
         let mut bad = c.clone();
-        bad.aud = "citrate-explorer".into();
+        bad.audiences = vec!["citrate-explorer".into()];
         assert!(validate_claims(&bad, &cfg, 1_780_000_000).is_err());
+    }
+
+    #[test]
+    fn aud_array_membership_and_azp() {
+        // STUDIO-16 / F-2: validate audience by membership, with azp for multi-aud.
+        let cfg = AuthConfig::default(); // client_id = citrate-studio
+        let mk = |aud: serde_json::Value, azp: Option<&str>| {
+            let mut obj = serde_json::json!({
+                "sub":"0xAbC","wallet_address":"0xAbC",
+                "iss":"https://auth.citrate.ai","exp":9_999_999_999i64
+            });
+            obj["aud"] = aud;
+            if let Some(a) = azp { obj["azp"] = serde_json::json!(a); }
+            let payload = URL_SAFE_NO_PAD.encode(obj.to_string().as_bytes());
+            decode_claims(&format!("h.{payload}.sig")).unwrap()
+        };
+        let now = 1_780_000_000;
+        // client_id present but NOT first → valid (membership, not position).
+        assert!(validate_claims(&mk(serde_json::json!(["other", "citrate-studio"]), Some("citrate-studio")), &cfg, now).is_ok());
+        // client_id absent → reject.
+        assert!(validate_claims(&mk(serde_json::json!(["other"]), None), &cfg, now).is_err());
+        // multiple audiences without matching azp → reject.
+        assert!(validate_claims(&mk(serde_json::json!(["citrate-studio", "other"]), None), &cfg, now).is_err());
+        assert!(validate_claims(&mk(serde_json::json!(["citrate-studio", "other"]), Some("other")), &cfg, now).is_err());
+        // single audience needs no azp.
+        assert!(validate_claims(&mk(serde_json::json!("citrate-studio"), None), &cfg, now).is_ok());
+    }
+
+    #[test]
+    fn empty_issuer_is_rejected() {
+        let c = Claims {
+            iss: "".into(),
+            audiences: vec!["citrate-studio".into()],
+            wallet_address: "0x".into(),
+            ..Default::default()
+        };
+        let cfg = AuthConfig { issuer: "".into(), ..AuthConfig::default() };
+        assert!(validate_claims(&c, &cfg, 1).is_err(), "empty issuer must not skip the iss check");
+    }
+
+    #[test]
+    fn issuer_scheme_enforced() {
+        // https always ok.
+        assert!(AuthConfig { issuer: "https://auth.citrate.ai".into(), ..AuthConfig::default() }.validate_issuer().is_ok());
+        // non-loopback http rejected even in debug.
+        assert!(AuthConfig { issuer: "http://evil.example".into(), ..AuthConfig::default() }.validate_issuer().is_err());
+        // loopback http allowed only in debug (tests run debug); release rejects it.
+        #[cfg(debug_assertions)]
+        assert!(AuthConfig { issuer: "http://127.0.0.1:3000".into(), ..AuthConfig::default() }.validate_issuer().is_ok());
     }
 
     #[test]
