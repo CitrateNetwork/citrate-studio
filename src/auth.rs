@@ -339,7 +339,7 @@ fn pct_decode(s: &str) -> String {
 
 /// Parse a `path?key=val&...` query into a map (decoded).
 fn parse_query(path: &str) -> std::collections::HashMap<String, String> {
-    let q = path.splitn(2, '?').nth(1).unwrap_or("");
+    let q = path.split_once('?').map(|x| x.1).unwrap_or("");
     q.split('&')
         .filter_map(|kv| {
             let mut it = kv.splitn(2, '=');
