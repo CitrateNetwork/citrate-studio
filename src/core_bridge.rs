@@ -434,21 +434,33 @@ pub mod dispatch {
         }
 
         /// Dispatch the `hello` capsule's `greet` — real wasmtime execution.
-        /// The shipped capsules carry placeholder content-hashes (signing is
-        /// CIT-AGENT-3e), so running them is a loudly-logged dev opt-in.
+        /// The shipped capsules carry placeholder content-hashes (signing is CIT-AGENT-3e), so
+        /// the runtime's integrity gate must be opened to run them. This is a DEV opt-in: it is
+        /// announced loudly and the prior env value is **restored after the call**, so the
+        /// bypass is never left sticky for the process lifetime (audit F-4). The core reads the
+        /// var at `call_raw` time, so set→call→restore is sufficient.
         pub fn greet(&self, name: &str) -> Result<String, String> {
-            std::env::set_var("CITRATE_ALLOW_UNVERIFIED_CAPSULES", "1");
+            const KEY: &str = "CITRATE_ALLOW_UNVERIFIED_CAPSULES";
+            eprintln!(
+                "WARN: opening the capsule integrity gate ({KEY}=1) to run an unverified \
+                 capsule (placeholder content-hash; DEV ONLY). Pack + sign via CIT-AGENT-3e to \
+                 remove this."
+            );
+            let prev = std::env::var(KEY).ok();
+            std::env::set_var(KEY, "1");
             // the interface is exported package-qualified (wasmtime component model)
-            let out = self
-                .inner
-                .call_raw(
-                    "hello",
-                    "citrate:hello-capsule/greeter@0.1.0",
-                    "greet",
-                    &[Val::String(name.to_string())],
-                )
-                .map_err(|e| e.to_string())?;
-            match out {
+            let out = self.inner.call_raw(
+                "hello",
+                "citrate:hello-capsule/greeter@0.1.0",
+                "greet",
+                &[Val::String(name.to_string())],
+            );
+            // Restore — never leave the gate open for the rest of the process.
+            match prev {
+                Some(v) => std::env::set_var(KEY, v),
+                None => std::env::remove_var(KEY),
+            }
+            match out.map_err(|e| e.to_string())? {
                 Val::String(s) => Ok(s),
                 other => Err(format!("unexpected return: {other:?}")),
             }

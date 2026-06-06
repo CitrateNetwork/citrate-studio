@@ -879,8 +879,9 @@ fn onboard_apply(cfg: &mut config::Config, id: &str, value: &str, input: &str, t
         }
         "runtime" => cfg.runtime = value.to_string(),
         "capsules" => {
-            // install only signature-verified capsules (fail-closed)
-            let (ok, _rejected) = config::install_capsules(&config::demo_capsule_sources());
+            // install only capsules from a pinned publisher with a valid signature (fail-closed)
+            let (sources, trust) = config::demo_capsule_sources_with_trust();
+            let (ok, _rejected) = config::install_capsules(&sources, &trust);
             cfg.capsules = ok.len() as u32;
         }
         "oversight" => {
