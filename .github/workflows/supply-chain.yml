@@ -27,27 +27,58 @@ jobs:
   cargo-deny:
     name: cargo deny (licenses + advisories + bans + sources)
     runs-on: ubuntu-latest
+    # The full dep graph cargo-deny needs (`cargo metadata`) only assembles when the
+    # optional `core-live` path dep — `../citrate-agent-runtime/agent/core` — is present.
+    # cargo-audit (the always-on hard gate) reads Cargo.lock directly and needs none of this.
+    env:
+      # Bump when studio's Cargo.lock pins a new chain rev; keep this agent-runtime rev's
+      # own lock in sync with that chain rev (its lock must pin the same chain commit).
+      AGENT_RUNTIME_REV: 95b4dd403878369ead36a74f684a75e289ce42ad
+      # cargo's built-in git backend (libgit2/libssh2) does NOT read ~/.ssh/config host
+      # aliases, so it can't resolve `github-citrate-chain`. Force the system `git` CLI,
+      # which honours the alias + IdentityFile configured above (same one the clone step uses).
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      - name: Configure SSH for the chain monorepo source
-        # cargo-deny runs `cargo metadata`, which resolves the optional core-live SSH dep.
-        # Provide the org deploy key + the `github-citrate-chain` host alias used in Cargo.lock.
+      - name: Configure SSH for the private sources
+        # Two read-only deploy keys: one to CLONE the agent-runtime sibling (the path dep),
+        # one for cargo to FETCH the chain crates that core-live pulls transitively. The host
+        # aliases match the ones used in both Cargo.lock files (`github-citrate-chain`) and the
+        # clone below (`github-citrate-agent-runtime`).
         env:
-          DEPLOY_KEY: ${{ secrets.CITRATE_CHAIN_DEPLOY_KEY }}
+          CHAIN_KEY: ${{ secrets.CITRATE_CHAIN_DEPLOY_KEY }}
+          RUNTIME_KEY: ${{ secrets.CITRATE_AGENT_RUNTIME_DEPLOY_KEY }}
         run: |
-          if [ -z "$DEPLOY_KEY" ]; then
-            echo "::error::CITRATE_CHAIN_DEPLOY_KEY is required for cargo-deny (core-live SSH source)"; exit 1
+          if [ -z "$CHAIN_KEY" ]; then
+            echo "::error::CITRATE_CHAIN_DEPLOY_KEY is required (core-live chain crates)"; exit 1
+          fi
+          if [ -z "$RUNTIME_KEY" ]; then
+            echo "::error::CITRATE_AGENT_RUNTIME_DEPLOY_KEY is required (core-live path dep)"; exit 1
           fi
           mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$CHAIN_KEY"   > ~/.ssh/chain_key
+          printf '%s\n' "$RUNTIME_KEY" > ~/.ssh/runtime_key
+          chmod 600 ~/.ssh/chain_key ~/.ssh/runtime_key
           ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
           cat >> ~/.ssh/config <<'EOF'
           Host github-citrate-chain
             HostName github.com
             User git
-            IdentityFile ~/.ssh/id_ed25519
+            IdentityFile ~/.ssh/chain_key
+            IdentitiesOnly yes
+          Host github-citrate-agent-runtime
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/runtime_key
+            IdentitiesOnly yes
           EOF
+      - name: Check out the agent-runtime sibling (core-live path dep)
+        # `actions/checkout` cannot target a path outside the workspace, so clone manually to
+        # the sibling location the path dep resolves to ($GITHUB_WORKSPACE/../citrate-agent-runtime).
+        run: |
+          git clone git@github-citrate-agent-runtime:CitrateNetwork/citrate-agent-runtime.git \
+            "$GITHUB_WORKSPACE/../citrate-agent-runtime"
+          git -C "$GITHUB_WORKSPACE/../citrate-agent-runtime" checkout --quiet "$AGENT_RUNTIME_REV"
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: cargo deny check

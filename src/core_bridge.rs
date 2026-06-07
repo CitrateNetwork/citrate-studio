@@ -385,6 +385,12 @@ mod tests {
         assert!(d.names().contains(&"hello".to_string()), "fleet: {:?}", d.names());
         let out = d.greet("Aleia").expect("greet runs");
         assert!(!out.is_empty(), "real ToolResult from wasmtime");
+        // F-4: the integrity-gate opt-in must not leak. `greet` restores the prior
+        // env value (here: unset) after the dispatch, so the bypass is never sticky.
+        assert!(
+            std::env::var("CITRATE_ALLOW_UNVERIFIED_CAPSULES").is_err(),
+            "F-4: CITRATE_ALLOW_UNVERIFIED_CAPSULES must be unset after dispatch (non-sticky)"
+        );
         eprintln!("hello capsule returned: {out}");
     }
 
