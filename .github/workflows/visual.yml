@@ -24,7 +24,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Pillow (image diff)
-        run: pip3 install --quiet pillow
+        # The macOS runner's Python is Homebrew-managed (PEP 668), so a bare
+        # `pip3 install` is refused ("externally-managed-environment"). Install into
+        # an isolated venv and expose it on PATH so the harness's `python3` finds Pillow.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet --upgrade pip pillow
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Visual regression check
         run: scripts/visual-harness.sh check
       - name: Upload gallery + diffs on failure
