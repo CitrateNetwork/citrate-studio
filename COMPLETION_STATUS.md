@@ -43,7 +43,8 @@ signed-capsule install, oversight default. First launch → onboarding; thereaft
 ## Quality bar (already met)
 
 - **Both builds green, zero studio warnings.** Default (fast, modeled core) + `core-live`
-  (real `citrate-agent-core`). 35 default / 40 core-live tests.
+  (real `citrate-agent-core`). 42 default / 46 core-live tests (post audit remediation;
+  core-live verified 2026-06-06 — see `.agentile/audits/2026-06-05-studio-security/REMEDIATION.md`).
 - **Parity-tested seams.** Every pure decision (SoD, quorum shape/count/decision, audit
   integrity) passes the *same* assertions under default and `core-live`.
 - **e2e harness.** Headless gate→sign→resume→done→audit loop, asserted, both builds.
