@@ -482,14 +482,18 @@ pub fn login(base: &AuthConfig, store: &dyn TokenStore) -> Result<AuthSession, A
     Ok(AuthSession { wallet: claims.wallet_address, kyc: claims.kyc_status.unwrap_or_default() })
 }
 
-/// Server-side revoke (best-effort) + local token clear.
+/// Server-side revoke (best-effort) + local token clear. The network revoke runs only over an
+/// authenticated channel — a bearer token is never POSTed to a plaintext issuer (STUDIO-20 /
+/// audit F-2 tidy). Local tokens are cleared regardless, so logout always succeeds locally.
 pub fn logout(cfg: &AuthConfig, store: &dyn TokenStore) -> Result<(), AuthError> {
-    if let Some(t) = store.load() {
-        if !t.access_token.is_empty() {
-            let url = format!("{}/logout", cfg.issuer.trim_end_matches('/'));
-            let _ = ureq::post(&url)
-                .set("Authorization", &format!("Bearer {}", t.access_token))
-                .call();
+    if cfg.validate_issuer().is_ok() {
+        if let Some(t) = store.load() {
+            if !t.access_token.is_empty() {
+                let url = format!("{}/logout", cfg.issuer.trim_end_matches('/'));
+                let _ = ureq::post(&url)
+                    .set("Authorization", &format!("Bearer {}", t.access_token))
+                    .call();
+            }
         }
     }
     store.clear().map_err(|e| AuthError::Io(e.to_string()))
@@ -624,6 +628,20 @@ mod tests {
         };
         let cfg = AuthConfig { issuer: "".into(), ..AuthConfig::default() };
         assert!(validate_claims(&c, &cfg, 1).is_err(), "empty issuer must not skip the iss check");
+    }
+
+    #[test]
+    fn logout_skips_network_on_insecure_issuer_but_clears_local() {
+        // STUDIO-20: a bad (plaintext, non-loopback) issuer must NOT receive a bearer token,
+        // but local tokens are still cleared so logout always succeeds locally.
+        let path = std::env::temp_dir().join(format!("citrate-studio-logout-{}.json", std::process::id()));
+        let store = FileTokenStore { path };
+        store
+            .save(&TokenSet { id_token: "id".into(), access_token: "tok".into(), refresh_token: None, expires_at: 0 })
+            .unwrap();
+        let cfg = AuthConfig { issuer: "http://evil.example".into(), ..AuthConfig::default() };
+        assert!(logout(&cfg, &store).is_ok());
+        assert!(store.load().is_none(), "local tokens cleared regardless of issuer");
     }
 
     #[test]

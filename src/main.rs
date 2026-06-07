@@ -803,9 +803,6 @@ fn umsg(text: &str) -> ChatMsg {
 fn approval_msg() -> ChatMsg {
     ChatMsg { kind: "approval".into(), text: "".into(), card_title: "".into(), steps: vm(vec![]), cta: "".into() }
 }
-fn cstep(name: &str, risk: &str, note: &str) -> CardStep {
-    CardStep { name: name.into(), risk: risk.into(), note: note.into() }
-}
 
 /// In-character local agent reply (no live model). Ported from chat.jsx.
 fn local_reply(t: &str) -> &'static str {
@@ -1624,27 +1621,22 @@ fn main() -> Result<(), slint::PlatformError> {
         let st = st.clone();
         let w = ui.as_weak();
         app.on_chat_approve(move || {
+            // STUDIO-20 / audit F-1 tidy: the beginner card must NOT fabricate an approval.
+            // It used to clear `pending` and narrate "the core returned Approved" with no core
+            // decision. Now it routes to the real, policy-seam-gated dock (the STUDIO-15 path),
+            // keeping the gate pending so the operator actually signs 2-of-N there — the core
+            // decides, not the chat card.
             {
                 let mut s = st.borrow_mut();
-                s.pending = None;
+                s.status = "paused".into();
                 s.signatures.clear();
-                s.chat.push(amsg("Quorum met — the core returned Approved. Writing the report and anchoring the Merkle root now."));
-                s.chat.push(ChatMsg {
-                    kind: "card".into(),
-                    text: "".into(),
-                    card_title: "Nightly reconciliation · complete".into(),
-                    steps: vm(vec![
-                        cstep("recon.snapshot", "low", "1,284 heads"),
-                        cstep("recon.fetch-records", "medium", "3,402 CUI"),
-                        cstep("recon.match-phi", "high", "7 anomalies"),
-                        cstep("recon.write-report", "medium", "report written"),
-                        cstep("recon.anchor-merkle", "low", "0x4c9f… anchored"),
-                    ]),
-                    cta: "Open the audit replay in Advanced".into(),
-                });
+                s.chat.push(amsg("Routing this to your approval dock — the PHI cross-match is High, so it needs 2-of-N from your roster. Sign it there and the run continues; nothing is approved until the core says so."));
                 s.chat_quick = svec(&["What were the 7 anomalies?", "Run something else"]);
             }
             if let Some(ui) = w.upgrade() {
+                let app = ui.global::<AppState>();
+                app.set_workspace("advanced".into());
+                app.set_chat_open(false);
                 refresh(&ui, &st.borrow());
             }
         });
