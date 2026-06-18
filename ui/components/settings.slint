@@ -286,12 +286,17 @@ component AccountSection inherits VerticalLayout {
     Row { k: "Wallet"; v: AppState.signed-in ? AppState.wallet-address : "— not signed in —"; mono: true; }
     Row { k: "Signer identity"; v: AppState.account-signer-id; mono: true; }
     Row { k: "Signing surface"; v: "Slint (native) · attested hardware"; }
-    Row { k: "Default role"; v: "ComplianceOfficer"; }
+    // AUTHSPINE S2-WP5: live entitlement tier + KYC, read from the id_token claims.
+    Row { k: "Access tier"; v: AppState.signed-in ? AppState.account-tier : "public"; mono: true; }
+    Row { k: "Citrate role"; v: AppState.signed-in && AppState.account-role != "" ? AppState.account-role : "—"; }
+    Row { k: "KYC"; v: AppState.signed-in ? (AppState.kyc-status == "" ? "not started" : AppState.kyc-status) : "— not signed in —"; }
     Rectangle { height: 10px; }
     HorizontalLayout {
         spacing: 10px; alignment: start;
+        // Ecosystem-wide entry point: complete or upgrade KYC at auth.citrate.ai.
+        Btn { text: "Manage account / Upgrade"; icon: "key"; kind: "primary"; sm: true; clicked => { AppState.manage-account(); } }
         Btn { text: "Rotate key"; icon: "key"; kind: "ghost"; sm: true; }
-        Btn { text: "Sign out"; icon: "logout"; kind: "danger"; sm: true; }
+        Btn { text: "Sign out"; icon: "logout"; kind: "danger"; sm: true; clicked => { AppState.sign-out(); } }
     }
 }
 

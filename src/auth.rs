@@ -151,12 +151,85 @@ impl TokenSet {
     }
 }
 
+/// The centralized access-entitlement claim every Citrate RP reads — the same
+/// `https://citrate.ai/entitlement` contract as `@citrate/oidc-client` and the web
+/// RPs (AUTHSPINE S2-WP5). Carried on the `openid` scope; absent ⇒ Public (fail-safe).
+pub const ENTITLEMENT_CLAIM: &str = "https://citrate.ai/entitlement";
+
+/// Centralized RBAC entitlement (tier + optional Citrate role) parsed from the
+/// entitlement claim. Mirrors the TS `Entitlement` shape exactly.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Entitlement {
+    pub tier: String,             // public | commercial | commercial.kyc | academic | confidential
+    pub org_id: Option<String>,
+    pub citrate_role: Option<String>,
+    pub milestone: Option<String>,
+    pub expires_at: Option<i64>,  // unix seconds; None = no expiry
+}
+
+/// The tier ladder rank, matching TS `TIER_ORDER`. Unknown/absent ⇒ public (0).
+pub fn tier_rank(tier: &str) -> u8 {
+    match tier {
+        "commercial" => 1,
+        "commercial.kyc" => 2,
+        "academic" => 3,
+        "confidential" => 4,
+        _ => 0, // public / unknown — fail-safe to the lowest tier
+    }
+}
+
+/// Parse the entitlement claim object. An unknown/absent tier ⇒ None (Public,
+/// fail-safe) — identical to the TS `parseEntitlement` contract.
+fn parse_entitlement(v: &serde_json::Value) -> Option<Entitlement> {
+    let o = v.as_object()?;
+    let tier = o.get("tier").and_then(|x| x.as_str())?;
+    if tier_rank(tier) == 0 && tier != "public" {
+        return None; // unknown tier string ⇒ treat as no entitlement
+    }
+    let s = |k: &str| o.get(k).and_then(|x| x.as_str()).map(|x| x.to_string());
+    Some(Entitlement {
+        tier: tier.to_string(),
+        org_id: s("orgId"),
+        citrate_role: s("citrateRole"),
+        milestone: s("milestone"),
+        expires_at: o.get("expiresAt").and_then(|x| x.as_i64()),
+    })
+}
+
+impl Entitlement {
+    /// Effective tier honoring expiry (expired ⇒ public). `now_unix` in seconds.
+    pub fn effective_tier(&self, now_unix: i64) -> &str {
+        match self.expires_at {
+            Some(exp) if now_unix > exp => "public",
+            _ => &self.tier,
+        }
+    }
+}
+
+// NOTE: Studio intentionally ships NO tier/role *gates* here. Per this module's
+// trust boundary, auth establishes who the operator is; what they may *approve*
+// stays with the core's `SignerRoster` + `Quorum`. The tier/role are read for
+// display + the Account-Hub upgrade path only. The web RPs (which DO gate routes)
+// carry the `requireTier`/`requireRole` primitives in `@citrate/oidc-client`.
+
+/// The hosted Account Hub URL on the issuer ("Manage account / Upgrade") — the
+/// single ecosystem-wide entry point to complete or upgrade KYC. Mirrors the TS
+/// `accountHubUrl`.
+pub fn account_hub_url(cfg: &AuthConfig, return_to: Option<&str>) -> String {
+    let base = format!("{}/account", cfg.issuer.trim_end_matches('/'));
+    match return_to {
+        Some(r) => format!("{base}?return_to={}", pct(r)),
+        None => base,
+    }
+}
+
 /// Claims we care about, extracted from the ID token. In `citrate-identity`,
 /// `sub` == `wallet_address` == an EIP-55 address.
 #[derive(Debug, Clone, Default)]
 pub struct Claims {
     pub wallet_address: String, // == the `sub` claim (EIP-55 address)
     pub kyc_status: Option<String>,
+    pub entitlement: Option<Entitlement>, // https://citrate.ai/entitlement (tier/role)
     pub iss: String,
     pub audiences: Vec<String>,  // all audiences (OIDC `aud` may be string or array)
     pub azp: Option<String>,     // authorized party — required when multi-audience
@@ -185,6 +258,7 @@ pub fn decode_claims(id_token: &str) -> Option<Claims> {
     Some(Claims {
         wallet_address: s("wallet_address").or_else(|| s("sub")).unwrap_or_default(),
         kyc_status: s("kyc_status"),
+        entitlement: v.get(ENTITLEMENT_CLAIM).and_then(parse_entitlement),
         iss: s("iss").unwrap_or_default(),
         audiences,
         azp: s("azp"),
@@ -323,6 +397,11 @@ impl std::error::Error for AuthError {}
 pub struct AuthSession {
     pub wallet: String,
     pub kyc: String,
+    /// Effective access tier (AUTHSPINE). "public" when no entitlement claim is
+    /// present — display-only here; real gating stays with the core's roster/quorum.
+    pub tier: String,
+    /// The operator's Citrate role from the entitlement claim, if any.
+    pub role: Option<String>,
 }
 
 fn random_bytes() -> [u8; 32] {
@@ -479,7 +558,15 @@ pub fn login(base: &AuthConfig, store: &dyn TokenStore) -> Result<AuthSession, A
     let claims = decode_claims(&tokens.id_token).ok_or_else(|| AuthError::Claims("undecodable id_token".into()))?;
     validate_claims(&claims, &cfg, now_unix())?;
     store.save(&tokens).map_err(|e| AuthError::Io(e.to_string()))?;
-    Ok(AuthSession { wallet: claims.wallet_address, kyc: claims.kyc_status.unwrap_or_default() })
+    Ok(session_from_claims(claims, now_unix()))
+}
+
+/// Project validated claims into the display session, resolving the effective tier
+/// (honoring expiry) and Citrate role from the entitlement claim.
+fn session_from_claims(c: Claims, now_unix: i64) -> AuthSession {
+    let tier = c.entitlement.as_ref().map(|e| e.effective_tier(now_unix)).unwrap_or("public").to_string();
+    let role = c.entitlement.as_ref().and_then(|e| e.citrate_role.clone());
+    AuthSession { wallet: c.wallet_address, kyc: c.kyc_status.unwrap_or_default(), tier, role }
 }
 
 /// Server-side revoke (best-effort) + local token clear. The network revoke runs only over an
@@ -521,18 +608,17 @@ pub fn refresh(cfg: &AuthConfig, store: &dyn TokenStore) -> Result<TokenSet, Aut
 /// The current session from stored tokens (for app startup). Validates the ID
 /// token; on expiry, attempts a single refresh before giving up.
 pub fn session_from_store(cfg: &AuthConfig, store: &dyn TokenStore) -> Option<AuthSession> {
-    let to_session = |c: Claims| AuthSession { wallet: c.wallet_address, kyc: c.kyc_status.unwrap_or_default() };
     let t = store.load()?;
     if let Some(c) = decode_claims(&t.id_token) {
         if validate_claims(&c, cfg, now_unix()).is_ok() {
-            return Some(to_session(c));
+            return Some(session_from_claims(c, now_unix()));
         }
     }
     // expired / invalid → try one refresh
     let t2 = refresh(cfg, store).ok()?;
     let c2 = decode_claims(&t2.id_token)?;
     validate_claims(&c2, cfg, now_unix()).ok()?;
-    Some(to_session(c2))
+    Some(session_from_claims(c2, now_unix()))
 }
 
 #[cfg(test)]
@@ -616,6 +702,70 @@ mod tests {
         assert!(validate_claims(&mk(serde_json::json!(["citrate-studio", "other"]), Some("other")), &cfg, now).is_err());
         // single audience needs no azp.
         assert!(validate_claims(&mk(serde_json::json!("citrate-studio"), None), &cfg, now).is_ok());
+    }
+
+    #[test]
+    fn entitlement_claim_parsed_and_tier_resolved() {
+        // AUTHSPINE S2-WP5: the entitlement claim rides the id_token; tier + role
+        // are read with the same contract as the web RPs.
+        let obj = serde_json::json!({
+            "sub":"0xAbC","wallet_address":"0xAbC","kyc_status":"verified",
+            "iss":"https://auth.citrate.ai","aud":"citrate-studio","exp":9_999_999_999i64,
+            "https://citrate.ai/entitlement": {
+                "tier":"confidential","orgId":"citrate","citrateRole":"auditor"
+            }
+        });
+        let payload = URL_SAFE_NO_PAD.encode(obj.to_string().as_bytes());
+        let c = decode_claims(&format!("h.{payload}.sig")).unwrap();
+        let ent = c.entitlement.clone().expect("entitlement parsed");
+        assert_eq!(ent.tier, "confidential");
+        assert_eq!(ent.citrate_role.as_deref(), Some("auditor"));
+        let s = session_from_claims(c, 1_780_000_000);
+        assert_eq!(s.tier, "confidential");
+        assert_eq!(s.role.as_deref(), Some("auditor"));
+    }
+
+    #[test]
+    fn entitlement_absent_or_unknown_tier_is_public() {
+        // No claim → public.
+        let mk = |obj: serde_json::Value| {
+            let p = URL_SAFE_NO_PAD.encode(obj.to_string().as_bytes());
+            decode_claims(&format!("h.{p}.sig")).unwrap()
+        };
+        let none = mk(serde_json::json!({"sub":"0x1","iss":"https://auth.citrate.ai","aud":"citrate-studio"}));
+        assert!(none.entitlement.is_none());
+        assert_eq!(session_from_claims(none, 1).tier, "public");
+        // Unknown tier string → fail-safe to no entitlement (public).
+        let bogus = mk(serde_json::json!({
+            "sub":"0x1","iss":"https://auth.citrate.ai","aud":"citrate-studio",
+            "https://citrate.ai/entitlement": {"tier":"superadmin"}
+        }));
+        assert!(bogus.entitlement.is_none());
+    }
+
+    #[test]
+    fn tier_rank_ladder_and_expiry_collapse() {
+        // ladder matches the TS TIER_ORDER.
+        assert!(tier_rank("commercial.kyc") > tier_rank("commercial"));
+        assert!(tier_rank("confidential") > tier_rank("academic"));
+        assert_eq!(tier_rank("public"), 0);
+        assert_eq!(tier_rank("bogus"), 0);
+        // an expired entitlement collapses to public at the session boundary.
+        let expired = Entitlement { tier: "confidential".into(), expires_at: Some(50), ..Default::default() };
+        assert_eq!(expired.effective_tier(100), "public");
+        assert_eq!(expired.effective_tier(10), "confidential");
+        let live = Entitlement { tier: "academic".into(), ..Default::default() };
+        assert_eq!(live.effective_tier(9_999), "academic");
+    }
+
+    #[test]
+    fn account_hub_url_builds_with_return_to() {
+        let cfg = AuthConfig::default(); // issuer https://auth.citrate.ai
+        assert_eq!(account_hub_url(&cfg, None), "https://auth.citrate.ai/account");
+        assert_eq!(
+            account_hub_url(&cfg, Some("https://studio.citrate.ai")),
+            "https://auth.citrate.ai/account?return_to=https%3A%2F%2Fstudio.citrate.ai"
+        );
     }
 
     #[test]
