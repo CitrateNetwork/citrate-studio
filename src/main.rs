@@ -1138,6 +1138,8 @@ fn restore_session(ui: &StudioWindow) {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&s.wallet).into());
         app.set_kyc_status(s.kyc.into());
+        app.set_account_tier(s.tier.into());
+        app.set_account_role(s.role.clone().unwrap_or_default().into());
         return;
     }
     // Dev-only: a CITRATE_STUDIO_SIGNEDIN seed fakes a session for screenshots/dev. A release
@@ -1148,6 +1150,7 @@ fn restore_session(ui: &StudioWindow) {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&w).into());
         app.set_kyc_status(std::env::var("CITRATE_STUDIO_KYC").unwrap_or_default().into());
+        app.set_account_tier(std::env::var("CITRATE_STUDIO_TIER").unwrap_or_else(|_| "public".into()).into());
     }
 }
 
@@ -1546,6 +1549,8 @@ fn main() -> Result<(), slint::PlatformError> {
                                 app.set_signed_in(true);
                                 app.set_wallet_address(trunc_wallet(&s.wallet).into());
                                 app.set_kyc_status(s.kyc.into());
+                                app.set_account_tier(s.tier.into());
+                                app.set_account_role(s.role.clone().unwrap_or_default().into());
                                 app.set_auth_status("".into());
                             }
                             Err(e) => {
@@ -1566,12 +1571,25 @@ fn main() -> Result<(), slint::PlatformError> {
                 app.set_signed_in(false);
                 app.set_wallet_address("".into());
                 app.set_kyc_status("".into());
+                app.set_account_tier("public".into());
+                app.set_account_role("".into());
                 app.set_auth_status("".into());
             }
             // best-effort server revoke + clear, off-thread.
             std::thread::spawn(move || {
                 let _ = auth::logout(&auth_config(), &auth::KeyringTokenStore::citrate());
             });
+        });
+    }
+    // ---- auth: open the hosted Account Hub (KYC / tier upgrade) on the issuer ----
+    {
+        app.on_manage_account(move || {
+            // The ecosystem-wide entry point: complete or upgrade KYC at auth.citrate.ai.
+            // `return_to` points back at the Studio site so a web upgrade can deep-link home.
+            let url = auth::account_hub_url(&auth_config(), Some("https://studio.citrate.ai"));
+            if let Err(e) = auth::open_url(&url) {
+                eprintln!("WARN: could not open the Account Hub ({url}): {e}");
+            }
         });
     }
 
@@ -1885,6 +1903,7 @@ fn headless_shot() -> Result<(), slint::PlatformError> {
         app.set_signed_in(true);
         app.set_wallet_address(trunc_wallet(&w).into());
         app.set_kyc_status(std::env::var("CITRATE_STUDIO_KYC").unwrap_or_default().into());
+        app.set_account_tier(std::env::var("CITRATE_STUDIO_TIER").unwrap_or_else(|_| "public".into()).into());
     }
 
     // Render. Two passes so layout settles before the captured frame.

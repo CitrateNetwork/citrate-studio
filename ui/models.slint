@@ -218,10 +218,13 @@ export global AppState {
     in property <bool> signed-in: false;
     in property <string> wallet-address;         // truncated display, e.g. 0x1a2b…90de
     in property <string> kyc-status;             // "verified" | "pending" | "" — from the ID token
+    in property <string> account-tier: "public"; // public|commercial|commercial.kyc|academic|confidential — from the entitlement claim (AUTHSPINE)
+    in property <string> account-role;           // Citrate role from the entitlement claim, "" when none
     in property <string> account-signer-id: "signer_id —"; // the operator's real signer_id
     in property <string> auth-status;            // "" | "signing" | "<error message>"
     callback sign-in();
     callback sign-out();
+    callback manage-account();                   // open the hosted Account Hub (KYC / upgrade) on auth.citrate.ai
 
     // ---- entry / view ----
     in-out property <string> view: "studio";    // studio | onboard
