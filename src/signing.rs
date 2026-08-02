@@ -11,6 +11,24 @@
 //! (secret in the OS keyring) work today; PIV/CAC and FIDO2 (attested hardware)
 //! are stubbed behind a clear seam for the live `SigningSurfaceTag::Slint` path.
 
+// `dev-filebacked` seeds a signer roster and writes its PRIVATE KEYS to disk in
+// plaintext (`to_json_with_secrets` in `load_or_seed` below). Cargo.toml has said
+// "NEVER enable in a shipping build (audit F-3)" since that audit — but nothing
+// enforced it, and `cargo check --release --features dev-filebacked` succeeded
+// (verified 2026-08-01). A prohibition carried only by a comment is a convention,
+// not a control, and this one guards private signing material in a T1 binary.
+//
+// The release workflow builds `cargo build --release --locked` with no features, so
+// nothing shipped has ever carried it. This makes that a fact the compiler enforces
+// rather than a habit the build command happens to keep.
+#[cfg(all(feature = "dev-filebacked", not(debug_assertions)))]
+compile_error!(
+    "`dev-filebacked` seeds a signer roster and persists its PRIVATE KEYS to disk in \
+     plaintext. It is a demo/screenshot affordance and must never be compiled into an \
+     optimized build (audit F-3). Drop `--features dev-filebacked`, or build in debug \
+     if you are producing screenshots."
+);
+
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
