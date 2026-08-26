@@ -2203,6 +2203,47 @@ mod tests {
         assert_eq!(summary, "2 pass · 1 warn");
         assert_eq!(doctor_summary(&[mk("Pass")]).0, "DOCTOR · HEALTHY");
         assert_eq!(doctor_summary(&[mk("Blocker")]).0, "DOCTOR · BLOCKED");
+    }
+
+    /// The Health Report must not invent results (Rule 1).
+    ///
+    /// `core-live` is OFF BY DEFAULT, so the shipping binary uses `data::doctor()` —
+    /// which was eleven hardcoded rows, every one "Pass", carrying specifics nothing
+    /// measured: "verify_integrity ok · 11,402 records", "3 / 100", "9 capsules
+    /// re-verified", "35,435 states · green". No operator-visible indication that the
+    /// report was modeled.
+    ///
+    /// This is a T1 partner-eval product, and a Health Report is exactly what an
+    /// evaluator reads to judge operational readiness. A doctor that always says
+    /// healthy is the diagnostic version of a verify button that cannot fail.
+    ///
+    /// The check NAMES stay — an evaluator should see what this product checks. The
+    /// RESULTS do not, because in this build there are none.
+    #[cfg(not(feature = "core-live"))]
+    #[test]
+    fn the_modeled_health_report_reports_no_results_it_did_not_measure() {
+        let rows = data::doctor();
+        for c in &rows {
+            assert_ne!(
+                c.sev, "Pass",
+                "{} claims Pass in a build that measured nothing",
+                c.id
+            );
+            assert!(
+                c.note.contains("not measured"),
+                "{} must say it was not measured; got {:?}",
+                c.id,
+                c.note
+            );
+        }
+        // The fabricated specifics must be gone. Thousands-separated counts are the
+        // form an invented metric almost always takes.
+        let all = rows.iter().map(|c| c.note.clone()).collect::<Vec<_>>().join(" ");
+        assert!(!all.contains("11,402"), "a fabricated record count survived");
+        assert!(!all.contains("35,435"), "a fabricated state count survived");
+        assert!(!all.contains("9 capsules"), "a fabricated capsule count survived");
+        // And the summary must not read healthy off a report that measured nothing.
+        assert_ne!(doctor_summary(&rows).0, "DOCTOR · HEALTHY");
         // the live seam yields a non-empty set with a coherent summary
         let rows = doctor_rows();
         assert!(!rows.is_empty());
@@ -2242,6 +2283,8 @@ mod tests {
         assert_eq!(data::tools_chain().len(), 11);
         assert_eq!(data::tools_code().len(), 6);
         assert_eq!(data::doctor().len(), 11);
+        // The default build has no runtime core, so it MEASURES nothing. The catalog
+        // must not report results it did not obtain (Rule 1) — see the tripwire below.
         assert_eq!(data::tripwires().len(), 9);
         // signers now come from the real ed25519 roster (STUDIO-4)
         assert_eq!(signing::Roster::seed_demo().signers.len(), 5);

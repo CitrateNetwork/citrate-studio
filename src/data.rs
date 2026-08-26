@@ -163,20 +163,39 @@ fn dcheck(id: &str, sev: &str, note: &str) -> DoctorCheck {
     DoctorCheck { id: id.into(), sev: sev.into(), note: note.into() }
 }
 #[cfg_attr(feature = "core-live", allow(dead_code))]
+/// The catalog of checks the Doctor RUNS — with, in this build, no results.
+///
+/// Every row used to report "Pass" with a specific nothing had measured:
+/// "verify_integrity ok · 11,402 records", "3 / 100", "9 capsules re-verified",
+/// "35,435 states · green". `core-live` is off by default, so that is what the
+/// shipping binary showed an operator, and nothing on the surface said it was
+/// modeled. A Health Report that always reads healthy is the diagnostic version of
+/// a verify button that cannot fail (Rule 1).
+///
+/// The check NAMES stay: an evaluator should be able to see what this product
+/// checks, and that list is true. The RESULTS are gone, because in a build with no
+/// runtime core there are none to report. Build with `--features core-live` and
+/// `core_bridge::doctor::report_rows()` supplies real ones.
 pub fn doctor() -> Vec<DoctorCheck> {
-    vec![
-        dcheck("audit-chain-integrity", "Pass", "verify_integrity ok · 11,402 records"),
-        dcheck("audit-file-permissions", "Pass", "mode 0o600"),
-        dcheck("approval-queue-depth", "Pass", "3 / 100"),
-        dcheck("pending-break-glass", "Pass", "none"),
-        dcheck("runtime-presence", "Pass", "tokio ok"),
-        dcheck("capsule-manifest-reverify", "Pass", "9 capsules re-verified"),
-        dcheck("wasm-linker-recheck", "Pass", "manifest↔WIT match"),
-        dcheck("policy-bundle-hash", "Pass", "matches pinned"),
-        dcheck("tla-spec-ci-status", "Pass", "35,435 states · green"),
-        dcheck("retention-age", "Pass", "mtime 6d / 90d"),
-        dcheck("anchor-reconciliation", "Warn", "2 roots pending reconciliation"),
+    const UNMEASURED: &str = "not measured — this build has no runtime core (core-live off)";
+    [
+        "audit-chain-integrity",
+        "audit-file-permissions",
+        "approval-queue-depth",
+        "pending-break-glass",
+        "runtime-presence",
+        "capsule-manifest-reverify",
+        "wasm-linker-recheck",
+        "policy-bundle-hash",
+        "tla-spec-ci-status",
+        "retention-age",
+        "anchor-reconciliation",
     ]
+    .iter()
+    // "Warn", not "Pass": the operator is being told the check did not run, which is
+    // a thing to attend to, not a thing that succeeded.
+    .map(|id| dcheck(id, "Warn", UNMEASURED))
+    .collect()
 }
 
 fn trip(id: &str, code: &str, cond: &str, sev: &str, state: &str, tx: &str) -> Tripwire {
