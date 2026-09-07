@@ -29,18 +29,37 @@ compile_error!(
      if you are producing screenshots."
 );
 
+// ST-B-011: the guard above rides `debug_assertions`, which a profile override
+// (`profile.release.debug-assertions = true`) can flip back on inside an optimized
+// build, bypassing it. `shipping_profile` is set by build.rs whenever OPT_LEVEL != 0,
+// i.e. gated on the optimization level itself — the property that actually matters —
+// so a dev-filebacked build with optimizations on ALSO fails to compile.
+#[cfg(all(feature = "dev-filebacked", shipping_profile))]
+compile_error!(
+    "`dev-filebacked` must never be compiled into an OPTIMIZED build (OPT_LEVEL != 0). \
+     This fires even when `profile.release.debug-assertions = true` masks the \
+     debug_assertions guard (audit ST-B-011). Build with opt-level 0 for demo screenshots."
+);
+
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
-fn random_secret() -> [u8; 32] {
-    let mut b = [0u8; 32];
-    getrandom::getrandom(&mut b).expect("OS entropy");
+fn random_secret() -> Zeroizing<[u8; 32]> {
+    let mut b = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(b.as_mut()).expect("OS entropy");
     b
 }
 
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Hex-encode secret bytes into a string that wipes itself on drop, so the
+/// plaintext key never lingers in a freed `String`'s heap (audit ST-B-008).
+fn to_hex_secret(bytes: &[u8; 32]) -> Zeroizing<String> {
+    Zeroizing::new(to_hex(bytes))
 }
 
 fn from_hex32(s: &str) -> Option<[u8; 32]> {
@@ -59,8 +78,9 @@ pub fn signer_id(pubkey: &[u8; 32]) -> String {
     to_hex(&Sha256::digest(pubkey))
 }
 
-/// Generate a fresh ed25519 keypair: returns (secret, pubkey).
-pub fn gen_keypair() -> ([u8; 32], [u8; 32]) {
+/// Generate a fresh ed25519 keypair: returns (secret, pubkey). The secret is a
+/// `Zeroizing<[u8;32]>` so it wipes itself on drop (audit ST-B-008).
+pub fn gen_keypair() -> (Zeroizing<[u8; 32]>, [u8; 32]) {
     let secret = random_secret();
     let sk = SigningKey::from_bytes(&secret);
     (secret, sk.verifying_key().to_bytes())
@@ -100,15 +120,33 @@ impl std::fmt::Display for SignError {
 
 /// One enrolled signer. `secret` is present only for the FileBacked (dev)
 /// surface; Keyring secrets live in the OS keyring (keyed by `signer_id`).
-#[derive(Debug, Clone)]
+///
+/// The secret is a `Zeroizing<[u8;32]>` so every copy wipes itself on drop, and
+/// `Debug` is hand-written to redact it — `#[derive(Debug)]` would otherwise
+/// print the raw private-key bytes (audit ST-B-008).
+#[derive(Clone)]
 pub struct EnrolledSigner {
     pub role: String,
     pub name: String,
     pub pubkey: [u8; 32],
-    pub secret: Option<[u8; 32]>, // FileBacked only
+    pub secret: Option<Zeroizing<[u8; 32]>>, // FileBacked only
     pub signer_id: String,
     pub surface: String, // FileBacked | Keyring | PIV | FIDO2
     pub wallet: String,  // the authenticated wallet that enrolled (optional)
+}
+
+impl std::fmt::Debug for EnrolledSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnrolledSigner")
+            .field("role", &self.role)
+            .field("name", &self.name)
+            .field("pubkey", &to_hex(&self.pubkey))
+            .field("secret", &self.secret.as_ref().map(|_| "<redacted>"))
+            .field("signer_id", &self.signer_id)
+            .field("surface", &self.surface)
+            .field("wallet", &self.wallet)
+            .finish()
+    }
 }
 
 impl EnrolledSigner {
@@ -124,18 +162,34 @@ impl EnrolledSigner {
 
 const KEYRING_SERVICE: &str = "citrate-studio-signer";
 
+/// Best-effort restrict a just-written file to owner read/write only (0o600).
+/// No-op on non-unix. Keeps signer material out of a world-readable file
+/// (audit ST-B-011 / ST-B-020).
+fn set_owner_only(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 /// Load a Keyring-surface secret from the OS keyring. Used by `sign_for` (the
 /// default-build / test signing path); the `core-live` binary signs through the
 /// runtime's `Ed25519FileSurface` instead, so this is unused there.
-#[cfg_attr(feature = "core-live", allow(dead_code))]
-fn keyring_secret(signer_id: &str) -> Option<[u8; 32]> {
+fn keyring_secret(signer_id: &str) -> Option<Zeroizing<[u8; 32]>> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, signer_id).ok()?;
-    from_hex32(&entry.get_password().ok()?)
+    let hex = Zeroizing::new(entry.get_password().ok()?); // wiped on drop
+    from_hex32(&hex).map(Zeroizing::new)
 }
 /// Store a Keyring-surface secret in the OS keyring.
 fn keyring_store(signer_id: &str, secret: &[u8; 32]) {
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, signer_id) {
-        let _ = entry.set_password(&to_hex(secret));
+        let hex = to_hex_secret(secret); // wiped on drop
+        let _ = entry.set_password(&hex);
     }
 }
 fn keyring_clear(signer_id: &str) {
@@ -158,12 +212,20 @@ impl Roster {
     pub fn enroll(&mut self, role: &str, name: &str, surface: &str, wallet: &str) -> &EnrolledSigner {
         let (secret, pubkey) = gen_keypair();
         let id = signer_id(&pubkey);
+        // ST-B-020: the security decision ("do we retain a plaintext key?") must not
+        // ride a permissive wildcard. Only the two explicit literals are honoured:
+        // "Keyring" stores to the OS keyring; "FileBacked" keeps the secret in memory
+        // (dev). ANY other value — a typo like "keyring", the stubbed "PIV"/"FIDO2"
+        // surfaces, or "" — keeps NO plaintext secret, so a mistyped surface can never
+        // accidentally strand a private key in process memory (it fails closed at
+        // `sign_for` with `SurfaceNotWired`, exactly as PIV/FIDO2 already do).
         let kept_secret = match surface {
             "Keyring" => {
                 keyring_store(&id, &secret);
                 None
             }
-            _ => Some(secret), // FileBacked (dev)
+            "FileBacked" => Some(secret), // dev only, explicit opt-in
+            _ => None,                    // unknown/typo/PIV/FIDO2 → never retain plaintext
         };
         self.signers.retain(|s| s.role != role);
         self.signers.push(EnrolledSigner {
@@ -192,9 +254,27 @@ impl Roster {
         self.signers.iter().find(|s| s.role == role)
     }
 
-    /// True iff some signer is enrolled for `role` (the fail-closed check).
-    pub fn authorized(&self, role: &str) -> bool {
+    /// True iff a signer *row* exists for `role`. This is NOT "can approve" —
+    /// a PIV/FIDO2 stub row and a production-loaded FileBacked row (whose secret
+    /// was correctly dropped on serialization) both have a row but no usable key.
+    /// Renamed from the misleading `authorized` (audit ST-B-020): callers deciding
+    /// whether a role can actually sign must use `can_sign`.
+    pub fn has_enrolled_row(&self, role: &str) -> bool {
         self.signers.iter().any(|s| s.role == role)
+    }
+
+    /// True iff `role` has an enrolled signer with a key this build can sign with —
+    /// a Keyring signer (secret in the OS keyring) or a FileBacked signer whose
+    /// secret is present in memory. The real fail-closed authorization check.
+    pub fn can_sign(&self, role: &str) -> bool {
+        self.signers.iter().any(|s| {
+            s.role == role
+                && match s.surface.as_str() {
+                    "Keyring" => keyring_secret(&s.signer_id).is_some(),
+                    "FileBacked" => s.secret.is_some(),
+                    _ => false,
+                }
+        })
     }
 
     /// Sign `payload` as `role` with the enrolled key; verifies before returning.
@@ -205,8 +285,8 @@ impl Roster {
     #[cfg_attr(feature = "core-live", allow(dead_code))]
     pub fn sign_for(&self, role: &str, payload: &[u8]) -> Result<([u8; 64], String), SignError> {
         let s = self.signer_for(role).ok_or_else(|| SignError::NoSigner(role.into()))?;
-        let secret = match s.surface.as_str() {
-            "FileBacked" => s.secret.ok_or(SignError::NoKey)?,
+        let secret: Zeroizing<[u8; 32]> = match s.surface.as_str() {
+            "FileBacked" => s.secret.clone().ok_or(SignError::NoKey)?,
             "Keyring" => keyring_secret(&s.signer_id).ok_or(SignError::NoKey)?,
             other => return Err(SignError::SurfaceNotWired(other.into())),
         };
@@ -239,7 +319,11 @@ impl Roster {
             .signers
             .iter()
             .map(|s| {
-                let secret = if include_secrets { s.secret.map(|sk| to_hex(&sk)) } else { None };
+                let secret = if include_secrets {
+                    s.secret.as_ref().map(|sk| to_hex(sk.as_ref()))
+                } else {
+                    None
+                };
                 serde_json::json!({
                     "role": s.role,
                     "name": s.name,
@@ -271,9 +355,16 @@ impl Roster {
                             role: g("role")?,
                             name: g("name").unwrap_or_default(),
                             pubkey,
-                            secret: g("secret").and_then(|h| from_hex32(&h)),
-                            signer_id: g("signer_id").unwrap_or_else(|| signer_id(&pubkey)),
-                            surface: g("surface").unwrap_or_else(|| "FileBacked".into()),
+                            secret: g("secret").and_then(|h| from_hex32(&h)).map(Zeroizing::new),
+                            // ST-B-020: `signer_id` is the runtime's authorization key and the
+                            // keyring lookup key. Always recompute it from the pubkey rather than
+                            // trusting the value in a (0644, world-readable) roster.json — a
+                            // tampered id must never be honoured verbatim.
+                            signer_id: signer_id(&pubkey),
+                            // ST-B-020: an ABSENT surface field must not default to the insecure
+                            // "FileBacked" surface. Default to "Keyring" (secure by default);
+                            // a genuine dev roster always writes its surface explicitly.
+                            surface: g("surface").unwrap_or_else(|| "Keyring".into()),
                             wallet: g("wallet").unwrap_or_default(),
                         })
                     })
@@ -287,7 +378,13 @@ impl Roster {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, self.to_json())
+        std::fs::write(path, self.to_json())?;
+        // ST-B-011 / ST-B-020: roster.json is signer material (pubkeys, signer_ids,
+        // and — on the dev surface — secrets). `std::fs::write` creates it 0644
+        // (world-readable); tighten it to owner-only so another local user cannot
+        // read it. Best-effort, unix only.
+        set_owner_only(path);
+        Ok(())
     }
     pub fn load_from(path: &std::path::Path) -> Option<Roster> {
         Some(Roster::from_json(&std::fs::read_to_string(path).ok()?))
@@ -353,6 +450,7 @@ pub fn load_or_seed() -> Roster {
                 let _ = std::fs::create_dir_all(dir);
             }
             let _ = std::fs::write(&p, r.to_json_with_secrets());
+            set_owner_only(&p); // dev seed writes plaintext keys — owner-only (ST-B-011)
             return r;
         }
         #[cfg(not(feature = "dev-filebacked"))]
@@ -396,18 +494,18 @@ mod tests {
     fn enroll_sign_and_fail_closed() {
         let mut r = Roster::default();
         // Fail-closed: nobody enrolled.
-        assert!(!r.authorized("Reviewer"));
+        assert!(!r.has_enrolled_row("Reviewer"));
         assert!(matches!(r.sign_for("Reviewer", b"x"), Err(SignError::NoSigner(_))));
 
         r.enroll("Reviewer", "Dorian Vale", "FileBacked", "0xabc");
-        assert!(r.authorized("Reviewer"));
+        assert!(r.has_enrolled_row("Reviewer"));
         let (sig, surface) = r.sign_for("Reviewer", b"payload").unwrap();
         assert_eq!(surface, "FileBacked");
         let pk = r.signer_for("Reviewer").unwrap().pubkey;
         assert!(verify(&pk, b"payload", &sig), "dock signature is a real, verifiable ed25519 sig");
 
         r.disenroll("Reviewer");
-        assert!(!r.authorized("Reviewer"));
+        assert!(!r.has_enrolled_row("Reviewer"));
     }
 
     #[test]
@@ -463,6 +561,100 @@ mod tests {
         r.save_to(&path).unwrap();
         let back = Roster::load_from(&path).unwrap();
         assert_eq!(back.signers.len(), 5);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ST-B-008: an enrolled signer's `Debug` must NOT print the private-key bytes.
+    // A `#[derive(Debug)]` on a `[u8;32]` secret would spill it into any log line.
+    #[test]
+    fn debug_of_a_signer_redacts_the_secret() {
+        let mut r = Roster::default();
+        r.enroll("Reviewer", "Dorian", "FileBacked", "0xabc");
+        let s = r.signer_for("Reviewer").unwrap();
+        let raw = s.secret.as_ref().unwrap();
+        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("<redacted>"), "secret must render redacted: {dbg}");
+        assert!(!dbg.contains(&hex), "the private-key hex must never appear in Debug output");
+        // and the whole roster's Debug (derived) inherits the redaction
+        assert!(!format!("{r:?}").contains(&hex));
+    }
+
+    // ST-B-020: the security decision "retain a plaintext key?" must not ride a
+    // permissive wildcard — only the explicit "FileBacked" literal keeps a secret;
+    // a typo, "", or a stub surface keeps NONE.
+    #[test]
+    fn enroll_never_retains_a_plaintext_key_for_an_unknown_surface() {
+        for surface in ["keyring", "KEYRING", "PIV", "FIDO2", "", "filebacked"] {
+            let mut r = Roster::default();
+            r.enroll("Reviewer", "Dorian", surface, "0xabc");
+            let s = r.signer_for("Reviewer").unwrap();
+            assert!(
+                s.secret.is_none(),
+                "surface {surface:?} must not strand a plaintext key in memory"
+            );
+            assert!(!r.can_sign("Reviewer"), "an unusable surface can't sign");
+        }
+        // the two explicit, honoured literals still behave as designed
+        let mut r = Roster::default();
+        r.enroll("Reviewer", "Dorian", "FileBacked", "0xabc");
+        assert!(r.signer_for("Reviewer").unwrap().secret.is_some());
+        assert!(r.can_sign("Reviewer"));
+    }
+
+    // ST-B-020: `has_enrolled_row` is presence, `can_sign` is authority. A stub
+    // (keyless) row is enrolled but cannot approve.
+    #[test]
+    fn has_row_is_not_can_sign_for_a_keyless_surface() {
+        let mut r = Roster::default();
+        let (_, pubkey) = gen_keypair();
+        r.signers.push(EnrolledSigner {
+            role: "SecurityOfficer".into(),
+            name: "Marcus".into(),
+            pubkey,
+            secret: None,
+            signer_id: signer_id(&pubkey),
+            surface: "PIV".into(),
+            wallet: "".into(),
+        });
+        assert!(r.has_enrolled_row("SecurityOfficer"), "the row exists");
+        assert!(!r.can_sign("SecurityOfficer"), "but it has no usable key");
+    }
+
+    // ST-B-020: a roster.json whose `signer_id` was tampered must be re-derived from
+    // the pubkey on load, never trusted verbatim; and an absent `surface` must
+    // default to the secure "Keyring", not the insecure "FileBacked".
+    #[test]
+    fn from_json_recomputes_signer_id_and_defaults_surface_securely() {
+        let (_, pubkey) = gen_keypair();
+        let real = signer_id(&pubkey);
+        let json = serde_json::json!({
+            "signers": [{
+                "role": "Reviewer",
+                "name": "Dorian",
+                "pubkey": to_hex(&pubkey),
+                "signer_id": "deadbeef".repeat(8), // an attacker-supplied id
+                // note: no "surface" field
+            }]
+        })
+        .to_string();
+        let r = Roster::from_json(&json);
+        let s = r.signer_for("Reviewer").unwrap();
+        assert_eq!(s.signer_id, real, "signer_id is recomputed, not trusted");
+        assert_ne!(s.signer_id, "deadbeef".repeat(8));
+        assert_eq!(s.surface, "Keyring", "absent surface defaults to the secure one");
+    }
+
+    // ST-B-011 / ST-B-020: a persisted roster.json must be owner-only (0o600), not
+    // the 0644 world-readable file `std::fs::write` creates by default.
+    #[cfg(unix)]
+    #[test]
+    fn saved_roster_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("citrate-roster-perm-{}.json", std::process::id()));
+        Roster::seed_demo().save_to(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "roster.json must be 0o600, got {mode:o}");
         let _ = std::fs::remove_file(&path);
     }
 }
