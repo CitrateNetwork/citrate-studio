@@ -64,7 +64,9 @@ pub fn clips() -> Vec<ClipData> {
             "Pull CUI-classified procurement records, read-only.",
             "Pulled 3,402 CUI procurement records (read-only).",
             "{\n records: 3402,\n classes: [CUI],\n paths: [read:/tenant/procurement]\n}",
-            "did:citrate:agent:0x77c4", true, "AGT-11", &[], 0, &[], ""),
+            // ST-B-004: Medium is a real OneOf gate — one approver from the required
+            // set is required (and sufficient). Empty roles made the gate unsatisfiable.
+            "did:citrate:agent:0x77c4", true, "AGT-11", &[], 1, &["Reviewer"], ""),
         clip("c3", "recon.match-phi", "0.8.3", "high", "high",
             &["fs", "clocks", "random"], &["PHI", "CUI"], &[], &["CUI"], 18, 15,
             "Cross-match procurement against PHI custody records; flag anomalies.",
@@ -77,7 +79,8 @@ pub fn clips() -> Vec<ClipData> {
             "Write the reconciliation report (denies secret paths).",
             "Wrote recon-2026-06-03.cui.md — secrets paths denied.",
             "{\n file: recon-2026-06-03.cui.md,\n bytes: 48213,\n denied: [.env, *.pem]\n}",
-            "did:citrate:agent:0x77c4", true, "AGT-11", &[], 0, &[], ""),
+            // ST-B-004: Medium OneOf — one approver required (Reviewer).
+            "did:citrate:agent:0x77c4", true, "AGT-11", &[], 1, &["Reviewer"], ""),
         clip("c5", "recon.anchor-merkle", "3.0.2", "low", "auto",
             &["read", "clocks"], &["PUBLIC"], &[], &["PUBLIC"], 42, 10,
             "Anchor the run's Merkle root on chain 40204 (NightlyMerkle).",

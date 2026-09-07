@@ -95,7 +95,7 @@ export component AuditScrubber inherits Rectangle {
             spacing: 10px;
             Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.citrate-green; y: (parent.height - self.height)/2; }
             Text { text: "SEALED LEDGER · AUDIT SCRUBBER"; font-family: Theme.font-mono; font-size: 11px; letter-spacing: 1.5px; color: Theme.sealed-fg; vertical-alignment: center; }
-            Text { text: AppState.frames.length + " frames · chain verified"; font-family: Theme.font-mono; font-size: 10px; color: Theme.sealed-fg-3; vertical-alignment: center; }
+            Text { text: AppState.frames.length + " frames · " + (AppState.scrubber-ok ? "chain verified" : AppState.scrubber-verdict); font-family: Theme.font-mono; font-size: 10px; color: AppState.scrubber-ok ? Theme.sealed-fg-3 : Theme.danger; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             AppIcon { name: "chevup"; size: 15px; tint: Theme.sealed-fg-2; y: (parent.height - self.height)/2; }
         }

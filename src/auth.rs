@@ -45,6 +45,18 @@ impl AuthConfig {
     /// issuer, fail-closed. (STUDIO-16 / audit F-2.)
     pub fn validate_issuer(&self) -> Result<(), AuthError> {
         let iss = self.issuer.trim_end_matches('/');
+        // CIT-STUDIO-02: the issuer flows into the authorize URL that `open_url`
+        // hands to the platform browser launcher. Reject any shell/URL metacharacter
+        // or whitespace so a hostile issuer value cannot smuggle an argument or
+        // command through a launcher that re-parses its string (e.g. Windows `cmd`).
+        if let Some(bad) = iss
+            .chars()
+            .find(|c| c.is_whitespace() || c.is_control() || "\"'`&|;<>^\\".contains(*c))
+        {
+            return Err(AuthError::Claims(format!(
+                "issuer contains a forbidden character {bad:?}: {iss}"
+            )));
+        }
         if iss.starts_with("https://") {
             return Ok(());
         }
@@ -295,6 +307,76 @@ pub fn validate_claims(c: &Claims, cfg: &AuthConfig, now_unix: i64) -> Result<()
     Ok(())
 }
 
+// =============================================================
+// CIT-STUDIO-01 / ST-B-013 — integrity seal over the stored token envelope.
+//
+// The ID token's RS256 signature is trusted via the TLS `/token` exchange, so it
+// is not re-verified. But `session_from_store` re-reads the token from the OS
+// keyring at every startup with no TLS context, so a local process that can write
+// the `oidc-tokens` keyring entry could seat forged claims. We bind the stored
+// bytes with an HMAC keyed by a per-install device seal key held under a SEPARATE
+// keyring account: a process that overwrites only the token entry cannot forge a
+// matching MAC, so tampering is detected on load (the claims still grant nothing
+// in this app — this is defence in depth on the identity path).
+// =============================================================
+
+use hmac::{Hmac, Mac};
+type HmacSha256 = Hmac<Sha256>;
+
+fn seal_hex(key: &[u8; 32], token_json: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key");
+    mac.update(token_json.as_bytes());
+    mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Wrap a token JSON string in a MAC-sealed envelope.
+pub fn seal_token(key: &[u8; 32], token_json: &str) -> String {
+    serde_json::json!({ "v": 1, "mac": seal_hex(key, token_json), "token": token_json }).to_string()
+}
+
+/// Open a sealed envelope, verifying the MAC in constant time. Returns the inner
+/// token JSON only if the MAC matches; `None` for a tampered, unsealed, or
+/// legacy-plaintext value (which forces a fresh login — fail-closed).
+pub fn open_sealed_token(key: &[u8; 32], sealed: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(sealed).ok()?;
+    let mac = v.get("mac")?.as_str()?;
+    let token = v.get("token")?.as_str()?;
+    let expect = seal_hex(key, token);
+    // constant-time compare (equal length hex strings)
+    if mac.len() != expect.len() {
+        return None;
+    }
+    let differ = mac.bytes().zip(expect.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b));
+    if differ == 0 {
+        Some(token.to_string())
+    } else {
+        None
+    }
+}
+
+const SEAL_KEY_SERVICE: &str = "citrate-studio";
+const SEAL_KEY_ACCOUNT: &str = "oidc-seal-key";
+
+/// The per-install device seal key, from a keyring account SEPARATE from the token
+/// entry. Created on first use. `None` if the keyring is unavailable.
+fn device_seal_key() -> Option<[u8; 32]> {
+    let entry = keyring::Entry::new(SEAL_KEY_SERVICE, SEAL_KEY_ACCOUNT).ok()?;
+    if let Ok(hex) = entry.get_password() {
+        if hex.len() == 64 {
+            let mut out = [0u8; 32];
+            for (i, ch) in hex.as_bytes().chunks(2).enumerate() {
+                out[i] = u8::from_str_radix(std::str::from_utf8(ch).ok()?, 16).ok()?;
+            }
+            return Some(out);
+        }
+    }
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key).ok()?;
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    entry.set_password(&hex).ok()?;
+    Some(key)
+}
+
 /// Where session tokens are persisted. Production is `KeyringTokenStore` (OS
 /// keyring: macOS Keychain / Windows Credential Manager / libsecret); a
 /// plaintext `FileTokenStore` exists for tests only.
@@ -304,20 +386,29 @@ pub trait TokenStore {
     fn clear(&self) -> std::io::Result<()>;
 }
 
-/// Test-only token store — plaintext JSON on disk, so the flow is testable
-/// without touching the OS keyring. Production uses `KeyringTokenStore`.
+/// Test-only token store — a MAC-sealed envelope on disk, so the seal/verify path
+/// (CIT-STUDIO-01) is exercised without touching the OS keyring. Production uses
+/// `KeyringTokenStore`.
 #[cfg(test)]
 pub struct FileTokenStore {
     pub path: std::path::PathBuf,
 }
 
 #[cfg(test)]
+impl FileTokenStore {
+    // A fixed device seal key stands in for the per-install keyring key in tests.
+    const TEST_KEY: [u8; 32] = [7u8; 32];
+}
+
+#[cfg(test)]
 impl TokenStore for FileTokenStore {
     fn load(&self) -> Option<TokenSet> {
-        TokenSet::from_json(&std::fs::read_to_string(&self.path).ok()?)
+        let sealed = std::fs::read_to_string(&self.path).ok()?;
+        let json = open_sealed_token(&Self::TEST_KEY, &sealed)?; // None ⇒ tampered ⇒ reject
+        TokenSet::from_json(&json)
     }
     fn save(&self, t: &TokenSet) -> std::io::Result<()> {
-        std::fs::write(&self.path, t.to_json())
+        std::fs::write(&self.path, seal_token(&Self::TEST_KEY, &t.to_json()))
     }
     fn clear(&self) -> std::io::Result<()> {
         match std::fs::remove_file(&self.path) {
@@ -344,12 +435,20 @@ impl KeyringTokenStore {
 }
 impl TokenStore for KeyringTokenStore {
     fn load(&self) -> Option<TokenSet> {
-        TokenSet::from_json(&self.entry()?.get_password().ok()?)
+        let stored = self.entry()?.get_password().ok()?;
+        // CIT-STUDIO-01: verify the integrity seal before trusting the claims. A
+        // process that overwrote only the token entry cannot forge a matching MAC,
+        // so a tampered (or legacy unsealed) value is rejected → fresh login.
+        let key = device_seal_key()?;
+        let json = open_sealed_token(&key, &stored)?;
+        TokenSet::from_json(&json)
     }
     fn save(&self, t: &TokenSet) -> std::io::Result<()> {
+        let key = device_seal_key().ok_or_else(|| std::io::Error::other("seal key"))?;
+        let sealed = seal_token(&key, &t.to_json());
         self.entry()
             .ok_or_else(|| std::io::Error::other("keyring entry"))?
-            .set_password(&t.to_json())
+            .set_password(&sealed)
             .map_err(std::io::Error::other)
     }
     fn clear(&self) -> std::io::Result<()> {
@@ -427,8 +526,13 @@ pub fn open_url(url: &str) -> Result<(), AuthError> {
     };
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "", url]);
+        // CIT-STUDIO-02: do NOT route through `cmd /C start`, which re-parses its
+        // argument string (metacharacters like `&`/`"` become an injection footgun).
+        // `rundll32 url.dll,FileProtocolHandler <url>` passes the URL as a single
+        // argv with no shell interpretation. `validate_issuer` also rejects
+        // metacharacters as defence in depth.
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
         c
     };
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -478,11 +582,37 @@ fn parse_query(path: &str) -> std::collections::HashMap<String, String> {
 /// authorization code after checking `state`. Responds to the browser with a
 /// close-this-window page.
 pub fn wait_for_callback(server: &tiny_http::Server, expected_state: &str) -> Result<String, AuthError> {
+    // ST-B-012: bound the wait. An abandoned sign-in (browser closed, user walked
+    // away) must not leak a detached thread + a bound loopback port for the life of
+    // the process. Default budget: 3 minutes.
+    wait_for_callback_until(
+        server,
+        expected_state,
+        std::time::Instant::now() + std::time::Duration::from_secs(180),
+    )
+}
+
+/// `wait_for_callback` with an explicit deadline (testable). Returns a timeout error
+/// rather than blocking forever if no callback arrives before `deadline`.
+pub fn wait_for_callback_until(
+    server: &tiny_http::Server,
+    expected_state: &str,
+    deadline: std::time::Instant,
+) -> Result<String, AuthError> {
     const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Citrate Studio</title>\
         <body style=\"font-family:system-ui;background:#0f2a1a;color:#cde7d6;display:grid;place-items:center;height:100vh;margin:0\">\
         <div style=\"text-align:center\"><h2 style=\"color:#8ecc09\">Signed in to Citrate Studio</h2>\
         <p>You can close this window and return to the app.</p></div>";
-    for req in server.incoming_requests() {
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Err(AuthError::Io("sign-in timed out".into()));
+        }
+        let req = match server.recv_timeout(deadline - now) {
+            Ok(Some(req)) => req,
+            Ok(None) => continue, // recv timed out this slice; the loop re-checks the deadline
+            Err(e) => return Err(AuthError::Io(e.to_string())),
+        };
         let url = req.url().to_string();
         if !url.starts_with("/auth/callback") {
             let _ = req.respond(tiny_http::Response::from_string("not found").with_status_code(404));
@@ -494,13 +624,12 @@ pub fn wait_for_callback(server: &tiny_http::Server, expected_state: &str) -> Re
         if let Some(err) = q.get("error") {
             return Err(AuthError::Token(err.clone()));
         }
-        match (q.get("code"), q.get("state")) {
-            (Some(code), Some(state)) if state == expected_state => return Ok(code.clone()),
-            (_, Some(_)) => return Err(AuthError::State),
-            _ => return Err(AuthError::Token("no code in callback".into())),
-        }
+        return match (q.get("code"), q.get("state")) {
+            (Some(code), Some(state)) if state == expected_state => Ok(code.clone()),
+            (_, Some(_)) => Err(AuthError::State),
+            _ => Err(AuthError::Token("no code in callback".into())),
+        };
     }
-    Err(AuthError::Io("loopback listener closed".into()))
 }
 
 /// Parse the `POST /token` JSON response into a `TokenSet`.
@@ -825,6 +954,93 @@ mod tests {
         let q = parse_query("/auth/callback?code=a%2Bb&state=xyz-1");
         assert_eq!(q.get("code").unwrap(), "a+b");
         assert_eq!(q.get("state").unwrap(), "xyz-1");
+    }
+
+    // CIT-STUDIO-02: an issuer carrying a shell/URL metacharacter (an injection
+    // footgun for a launcher that re-parses its argument) must be rejected before
+    // it can reach `open_url`.
+    #[test]
+    fn validate_issuer_rejects_shell_metacharacters() {
+        for bad in [
+            "https://auth.citrate.ai/ & calc.exe",
+            "https://auth.citrate.ai\"quote",
+            "https://auth.citrate.ai|pipe",
+            "https://auth.citrate.ai;rm",
+            "https://auth.citrate.ai<redir",
+            "https://auth citrate.ai", // whitespace
+        ] {
+            assert!(
+                AuthConfig { issuer: bad.into(), ..AuthConfig::default() }.validate_issuer().is_err(),
+                "issuer must be rejected: {bad:?}"
+            );
+        }
+        // the clean production issuer still validates
+        assert!(AuthConfig { issuer: "https://auth.citrate.ai".into(), ..AuthConfig::default() }.validate_issuer().is_ok());
+    }
+
+    // ST-B-012: an abandoned sign-in must not block forever. With a deadline and no
+    // callback, `wait_for_callback_until` returns a timeout error, so the caller can
+    // drop the listener (freeing the thread + loopback port).
+    #[test]
+    fn loopback_wait_times_out_when_no_callback_arrives() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        let start = std::time::Instant::now();
+        let r = wait_for_callback_until(&server, "state-xyz", deadline);
+        assert!(matches!(r, Err(AuthError::Io(ref s)) if s.contains("timed out")), "got {r:?}");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "returned promptly");
+    }
+
+    // CIT-STUDIO-01: the token seal round-trips and detects a tampered payload.
+    #[test]
+    fn token_seal_roundtrips_and_detects_tamper() {
+        let key = [9u8; 32];
+        let json = r#"{"id_token":"h.p.s","access_token":"a","refresh_token":null,"expires_at":0}"#;
+        let sealed = seal_token(&key, json);
+        assert_eq!(open_sealed_token(&key, &sealed).as_deref(), Some(json), "valid seal opens");
+        // a different key does not open it
+        assert!(open_sealed_token(&[0u8; 32], &sealed).is_none());
+        // a tampered token field is rejected (MAC no longer matches)
+        let tampered = sealed.replace("h.p.s", "h.EVIL.s");
+        assert!(open_sealed_token(&key, &tampered).is_none(), "tamper detected");
+        // a legacy unsealed value is rejected (fail-closed → fresh login)
+        assert!(open_sealed_token(&key, json).is_none());
+    }
+
+    // CIT-STUDIO-01 (the tripwire): session_from_store must reject a stored token
+    // whose sealed payload was altered by another local process.
+    #[test]
+    fn session_from_store_rejects_a_tampered_stored_token() {
+        let path = std::env::temp_dir().join(format!("citrate-studio-seal-{}.json", std::process::id()));
+        let store = FileTokenStore { path: path.clone() };
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"0xAbC","wallet_address":"0xAbC","iss":"https://auth.citrate.ai","aud":"citrate-studio","exp":9999999999}"#,
+        );
+        let jwt = format!("eyJhbGciOiJSUzI1NiJ9.{payload}.sig");
+        store
+            .save(&TokenSet { id_token: jwt, access_token: "a".into(), refresh_token: None, expires_at: 0 })
+            .unwrap();
+        let cfg = AuthConfig::default();
+        // A well-sealed token yields a session.
+        assert!(session_from_store(&cfg, &store).is_some(), "intact sealed token restores a session");
+
+        // Now tamper the stored envelope's token bytes directly on disk (simulating a
+        // process that can write only the token entry) WITHOUT recomputing the MAC.
+        let sealed = std::fs::read_to_string(&path).unwrap();
+        let mut env: serde_json::Value = serde_json::from_str(&sealed).unwrap();
+        let evil_payload = URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"0xEVIL","wallet_address":"0xEVIL","iss":"https://auth.citrate.ai","aud":"citrate-studio","exp":9999999999,"citrateRole":"auditor"}"#,
+        );
+        let evil_jwt = format!("eyJhbGciOiJSUzI1NiJ9.{evil_payload}.sig");
+        let forged = TokenSet { id_token: evil_jwt, access_token: "a".into(), refresh_token: None, expires_at: 0 }.to_json();
+        env["token"] = serde_json::Value::String(forged); // stale MAC now covers the wrong bytes
+        std::fs::write(&path, env.to_string()).unwrap();
+
+        assert!(
+            session_from_store(&cfg, &store).is_none(),
+            "a tampered stored token must be rejected"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

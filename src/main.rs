@@ -76,21 +76,20 @@ mod audit_verify {
         pub message: String, // carries the verified frame count when ok
         pub break_seq: i32,  // frame sequence where the chain breaks; -1 = clean
     }
+    /// Default build (no runtime core): there is no real `AuditChain` to run
+    /// `verify_integrity` against, so this MUST NOT fabricate a verdict. Audit
+    /// ST-B-001: the old default returned a hard-coded `verify_integrity() ok`
+    /// for input it never inspected (and a constant break-at-sequence-6 on the
+    /// tamper toggle), i.e. a verify button that could not fail. Following the
+    /// `data::doctor()` remedy, we report honestly that nothing was verified
+    /// rather than invent a pass — `tampered` is ignored because this build has
+    /// no chain to tamper with. Build `--features core-live` for the real check.
     #[cfg(not(feature = "core-live"))]
-    pub fn verify(frames: &[(u64, String, String)], tampered: bool) -> Verdict {
-        if tampered {
-            Verdict {
-                ok: false,
-                message: "previous_hash break at sequence 6: chain tampered".into(),
-                break_seq: 6,
-            }
-        } else {
-            let n = frames.len();
-            Verdict {
-                ok: true,
-                message: format!("verify_integrity() ok · {n} frames"),
-                break_seq: -1,
-            }
+    pub fn verify(_frames: &[(u64, String, String)], _tampered: bool) -> Verdict {
+        Verdict {
+            ok: false,
+            message: "not verified — this build has no runtime core (core-live off)".into(),
+            break_seq: -1,
         }
     }
     #[cfg(feature = "core-live")]
@@ -117,13 +116,18 @@ struct RunState {
     pending: Option<String>,
     signatures: Vec<(String, String, String)>, // (role, name, surface)
     approved: Vec<String>,
-    medium: Vec<String>, // clip ids queued
+    medium: Vec<String>, // clip ids queued (awaiting a Medium OneOf approval)
+    medium_rejected: Vec<String>, // clip ids an operator explicitly Rejected (audit ST-B-004)
     auto: Vec<String>,   // capsule names auto-approved
     trip_fired: bool,
     dry: Vec<String>,
     solo: Option<String>,
     oversight: String, // in | on | out
     ttl: i32,
+    // A fresh random id per run — folded into every gate-approval signed message
+    // so an approval signature is unique to this run and cannot be replayed against
+    // a later run of the same step (audit ST-B-006).
+    run_id: String,
     // chat (beginner + drawer)
     chat: Vec<ChatMsg>,
     chat_quick: Vec<String>,
@@ -180,11 +184,13 @@ impl RunState {
         self.signatures.clear();
         self.approved.clear();
         self.medium.clear();
+        self.medium_rejected.clear();
         self.auto.clear();
         self.trip_fired = false;
         self.sign_error.clear();
         self.just_completed.clear();
         self.outputs.clear();
+        self.run_id = new_run_id(); // a new run ⇒ a fresh, unreplayable approval domain
         #[cfg(feature = "core-live")]
         {
             self.live_open = None;
@@ -199,19 +205,43 @@ impl RunState {
         let prev = self.playhead;
         let mut next = prev + SPEED;
         let base = self.base.clone();
-        // gate pause (high/critical)
+        // Gate pause. High/Critical always halt for a human — "no bypass". Medium is a
+        // real OneOf gate too and halts as well (audit ST-B-004), UNLESS the oversight
+        // dial is Human-out (auto-approve Low/Medium while its TTL is live — audit
+        // ST-B-005) or the operator has already Rejected this action.
+        let human_out = self.oversight == "out" && self.ttl > 0;
         for c in &base {
-            if (c.gate == "high" || c.gate == "critical")
-                && !self.approved.contains(&c.id.to_string())
-            {
-                let cs = c.start as f32;
-                if next >= cs && prev <= cs + 0.001 {
+            let id = c.id.to_string();
+            if self.approved.contains(&id) {
+                continue;
+            }
+            let cs = c.start as f32;
+            if !(next >= cs && prev <= cs + 0.001) {
+                continue;
+            }
+            match c.gate.as_str() {
+                "high" | "critical" => {
                     next = cs;
                     self.status = "paused".into();
-                    self.pending = Some(c.id.to_string());
+                    self.pending = Some(id);
                     self.signatures.clear();
                     break;
                 }
+                "medium" => {
+                    if self.medium_rejected.contains(&id) {
+                        continue; // operator declined — do not gate or dispatch it
+                    }
+                    if human_out {
+                        self.approved.push(id); // dial promise: auto-approve under Human-out
+                        continue;
+                    }
+                    next = cs;
+                    self.status = "paused".into();
+                    self.pending = Some(id);
+                    self.signatures.clear();
+                    break;
+                }
+                _ => {}
             }
         }
         // side-effects on crossing boundaries
@@ -238,6 +268,24 @@ impl RunState {
             self.status = "done".into();
         }
         self.playhead = next;
+    }
+
+    /// One second of the Human-out oversight countdown. While Human-out is in force
+    /// its TTL decrements; when it reaches zero the dial's own promise ("expires in
+    /// …") is honoured — oversight snaps back to Human-in so Low/Medium stop
+    /// auto-approving (audit ST-B-005). Returns true if anything changed (→ repaint).
+    fn ttl_tick(&mut self) -> bool {
+        if self.oversight != "out" {
+            return false;
+        }
+        if self.ttl > 0 {
+            self.ttl -= 1;
+        }
+        if self.ttl == 0 {
+            self.oversight = "in".into(); // self-expire back to Human-in-loop
+            return true;
+        }
+        true
     }
 }
 
@@ -385,10 +433,33 @@ fn signers_from_roster(r: &signing::Roster) -> Vec<Signer> {
         .collect()
 }
 
-/// The artifact a gate signs: the pending capsule's payload hash.
-fn gate_payload(c: &ClipData) -> Vec<u8> {
+/// A fresh, random run id (32 hex chars) — the per-run domain for gate approvals.
+fn new_run_id() -> String {
+    let mut b = [0u8; 16];
+    getrandom::getrandom(&mut b).expect("OS entropy");
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Domain-separation tag for a gate-approval signature. Binding it into the signed
+/// message means a signature over a gate approval is not a valid signature over any
+/// other protocol's message (e.g. a capsule-publisher signature) even across
+/// identical bytes (audit ST-B-006).
+const GATE_APPROVAL_DOMAIN: &str = "citrate-studio/approval/v1";
+
+/// The artifact a gate signs. Unlike the old `payload_hash`-only bytes, this is a
+/// canonical, domain-separated commitment that is unique to *this run* and *this
+/// action*: it binds the domain tag, the run id, the clip id + version, and the
+/// action's payload hash. Two logically-distinct actions therefore never produce
+/// the same signed message, and an approval captured from one run cannot be
+/// replayed against a later run of the same step (audit ST-B-006).
+fn gate_payload_for(run_id: &str, c: &ClipData) -> Vec<u8> {
     let ph = c.payload_hash.to_string();
-    if ph.is_empty() { format!("{}:{}", c.id, c.version).into_bytes() } else { ph.into_bytes() }
+    format!(
+        "{GATE_APPROVAL_DOMAIN}\u{1f}{run_id}\u{1f}{id}\u{1f}{ver}\u{1f}{ph}",
+        id = c.id,
+        ver = c.version,
+    )
+    .into_bytes()
 }
 
 /// Route a dock signature through the REAL async ApprovalQueue (core-live).
@@ -426,7 +497,7 @@ fn live_sign(s: &mut RunState, clip: &ClipData, payload: &[u8], role: &str) {
         }
         s.live_open = Some(cid.clone());
     }
-    let res = s.live.as_ref().map(|lq| lq.sign(&cid, secret, role));
+    let res = s.live.as_ref().map(|lq| lq.sign(&cid, *secret, role));
     match res {
         Some(Ok(_met)) => {
             s.signatures.push((role.to_string(), signer.name.clone(), "Slint".into()));
@@ -447,7 +518,7 @@ fn live_sign(s: &mut RunState, clip: &ClipData, payload: &[u8], role: &str) {
 /// the UI surfaces an identical message however the signature was submitted.
 #[cfg(not(feature = "core-live"))]
 fn admit_signature(s: &RunState, role: &str) -> Result<(), String> {
-    if !s.roster.authorized(role) {
+    if !s.roster.has_enrolled_row(role) {
         return Err("No signer enrolled (fail-closed)".into());
     }
     // The proposer (Operator) cannot approve their own action.
@@ -483,7 +554,7 @@ fn apply_sign(s: &mut RunState, role: &str) {
         },
         None => return,
     };
-    let payload = gate_payload(&clip);
+    let payload = gate_payload_for(&s.run_id, &clip);
     #[cfg(feature = "core-live")]
     {
         let _ = &payload; // used by live_sign below
@@ -592,7 +663,7 @@ fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
             let readonly = role == "Auditor";
             // SoD + approvability come from policy (the real core under
             // `core-live`); enrollment is the fail-closed gate on top.
-            let reason: Option<&str> = if !st.roster.authorized(role) {
+            let reason: Option<&str> = if !st.roster.has_enrolled_row(role) {
                 Some("No signer enrolled (fail-closed)")
             } else if proposer {
                 Some("Proposer can't self-approve")
@@ -760,12 +831,14 @@ fn new_state_with(roster: signing::Roster) -> Rc<RefCell<RunState>> {
         signatures: vec![],
         approved: vec![],
         medium: vec![],
+        medium_rejected: vec![],
         auto: vec![],
         trip_fired: false,
         dry: vec![],
         solo: None,
         oversight: "in".into(),
         ttl: 3600,
+        run_id: new_run_id(),
         chat: vec![amsg("You're set up, Aleia. Tell me an outcome and I'll handle the capsules, route the approvals, and write every step to the sealed ledger. What should I do first?")],
         chat_quick: svec(&["Run the nightly reconciliation", "What can you do?", "Show me a past run"]),
         chat_busy: false,
@@ -876,10 +949,14 @@ fn onboard_apply(cfg: &mut config::Config, id: &str, value: &str, input: &str, t
         }
         "runtime" => cfg.runtime = value.to_string(),
         "capsules" => {
-            // install only capsules from a pinned publisher with a valid signature (fail-closed)
-            let (sources, trust) = config::demo_capsule_sources_with_trust();
-            let (ok, _rejected) = config::install_capsules(&sources, &trust);
-            cfg.capsules = ok.len() as u32;
+            // ST-B-002: the old path called `demo_capsule_sources_with_trust`, which
+            // generates a keypair, pins THAT key, signs with it, and "verifies" —
+            // a verification that cannot fail against a self-generated anchor, and it
+            // installs nothing to disk. Reporting "N capsules, each signature-verified"
+            // off that is an assurance the build cannot back. Until a real pinned-
+            // publisher registry is wired (CIT-AGENT-3e), no capsule is installed:
+            // the runtime stays fail-closed and refuses unsigned capsules on its own.
+            cfg.capsules = config::installed_capsule_count();
         }
         "oversight" => {
             cfg.oversight = if t.contains("monitor") || t.contains("on-loop") || t.contains("on)") { "on".into() }
@@ -968,9 +1045,15 @@ fn handle_onboard(w: &Weak<StudioWindow>, st: &Rc<RefCell<RunState>>, input: &st
             ),
             "runtime" => ("Connected — I verified the model's SHA-256 before binding it. Next, who approves consequential actions? I'll enroll an approval roster.".into(),
                 svec(&["Use my org directory", "Add signers manually", "Solo for now"])),
-            "roster" => ("Roster enrolled. Separation-of-duties is enforced for you — Compliance and Security can't both sign one action, and the Auditor never approves. Next, capsules.".into(),
+            // ST-B-003: this step configures the roster SHAPE only — it enrols no signer
+            // (a shipping build is fail-closed and stays that way until you enrol keys in
+            // Settings). Say so, rather than claiming enforcement that isn't wired yet.
+            "roster" => ("Noted your approval shape. No signer is enrolled yet — enrol keys per role in Settings, and High/Critical gates stay fail-closed (they will hold the run) until you do. Separation-of-duties is then enforced by the core: Compliance and Security can't both sign one action, and the Auditor never approves. Next, capsules.".into(),
                 svec(&["Install the reconciliation set", "Just the basics"])),
-            "capsules" => (format!("Installed {} capsules, each signature-verified — anything unsigned stays locked, so I can't stage what the runtime would refuse to run. Last setting: how closely do you want to watch? You can change this per-capsule later.", s.cfg.capsules),
+            // ST-B-002: no signed capsule registry is configured in this build, so nothing
+            // is staged. The runtime refuses unsigned capsules on its own — say that,
+            // instead of reporting a signature-verified install that did not happen.
+            "capsules" => ("No signed capsule registry is configured in this build, so nothing was staged — the runtime refuses to run anything unsigned regardless. When a pinned-publisher feed is wired, verified capsules stage here. Last setting: how closely do you want to watch? You can change this per-capsule later.".into(),
                 svec(&["Approve each (in-loop)", "Monitor (on-loop)", "Auto within policy"])),
             "oversight" => ("Set. High and Critical always ask regardless. That's everything — your harness is ready and saved. Try it: tell me an outcome you want, in plain words.".into(),
                 svec(&["Reconcile last night's ledger across all facilities"])),
@@ -1378,8 +1461,32 @@ fn main() -> Result<(), slint::PlatformError> {
         apply_sign(&mut st.borrow_mut(), role.as_ref());
     });
     on!(on_medium_approve, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
+        // ST-B-004: a Medium gate is OneOf — a single non-proposer approval releases
+        // it. Route through the SAME policy seam as High (apply_sign → apply_resume),
+        // so the run only advances when the core's quorum is satisfied; do not just
+        // dismiss the card.
         let mut s = st.borrow_mut();
         let id = id.to_string();
+        if s.pending.as_deref() == Some(id.as_str()) {
+            apply_sign(&mut s, "Reviewer");
+            apply_resume(&mut s);
+        }
+        s.medium.retain(|x| x != &id);
+    });
+    on!(on_medium_reject, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
+        // ST-B-004: Reject is a DISTINCT action from Approve — it records the decision
+        // and drops the gate WITHOUT approving, and the action is not dispatched.
+        let mut s = st.borrow_mut();
+        let id = id.to_string();
+        if !s.medium_rejected.contains(&id) {
+            s.medium_rejected.push(id.clone());
+        }
+        if s.pending.as_deref() == Some(id.as_str()) {
+            s.pending = None;
+            s.signatures.clear();
+            s.sign_error.clear();
+            s.status = "running".into();
+        }
         s.medium.retain(|x| x != &id);
     });
     // ---- signer roster (STUDIO-4): enroll generates a real ed25519 key ----
@@ -1554,14 +1661,24 @@ fn main() -> Result<(), slint::PlatformError> {
     // ---- auth: OIDC + SIWE loopback PKCE (off-thread; result → event loop) ----
     {
         let w = ui.as_weak();
+        // ST-B-012: an in-flight guard so a second "Sign in" click while one is
+        // pending is a no-op, rather than spawning a second detached thread + a
+        // second bound loopback listener that would leak until process exit.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let signing_in = std::sync::Arc::new(AtomicBool::new(false));
         app.on_sign_in(move || {
+            if signing_in.swap(true, Ordering::SeqCst) {
+                return; // already signing in — ignore the extra click
+            }
             if let Some(ui) = w.upgrade() {
                 ui.global::<AppState>().set_auth_status("signing".into());
             }
             let weak = w.clone();
+            let done = signing_in.clone();
             std::thread::spawn(move || {
                 let result = auth::login(&auth_config(), &auth::KeyringTokenStore::citrate());
                 let _ = slint::invoke_from_event_loop(move || {
+                    done.store(false, Ordering::SeqCst); // resolved; a new one may start
                     if let Some(ui) = weak.upgrade() {
                         let app = ui.global::<AppState>();
                         match result {
@@ -1810,15 +1927,8 @@ fn main() -> Result<(), slint::PlatformError> {
             slint::TimerMode::Repeated,
             std::time::Duration::from_secs(1),
             move || {
-                let mut tick = false;
-                {
-                    let mut s = st.borrow_mut();
-                    if s.oversight == "out" && s.ttl > 0 {
-                        s.ttl -= 1;
-                        tick = true;
-                    }
-                }
-                if tick {
+                let changed = st.borrow_mut().ttl_tick();
+                if changed {
                     if let Some(ui) = w.upgrade() {
                         refresh(&ui, &st.borrow());
                     }
@@ -1983,6 +2093,10 @@ mod tests {
     fn tick_pauses_at_high_gate_with_side_effects() {
         let st = state();
         let mut s = st.borrow_mut();
+        // Medium clips now gate too (ST-B-004); pre-approve them so this test still
+        // exercises the HIGH gate specifically.
+        s.approved.push("c2".into());
+        s.approved.push("c4".into());
         s.status = "running".into();
         for _ in 0..400 {
             if s.status != "running" {
@@ -2004,7 +2118,11 @@ mod tests {
     fn tick_runs_to_completion_when_gate_pre_approved() {
         let st = state();
         let mut s = st.borrow_mut();
-        s.approved.push("c3".into()); // skip the high gate
+        // Pre-approve every gate — the two Medium (c2, c4) and the High (c3) — so the
+        // run flows to completion (ST-B-004 made Medium a real gate).
+        s.approved.push("c2".into());
+        s.approved.push("c3".into());
+        s.approved.push("c4".into());
         s.status = "running".into();
         for _ in 0..400 {
             if s.status != "running" {
@@ -2017,6 +2135,97 @@ mod tests {
         assert!(s.trip_fired, "TRIP-AU-002 fires past unit 22");
         assert!(s.auto.iter().any(|x| x == "recon.snapshot"));
         assert!(s.auto.iter().any(|x| x == "recon.anchor-merkle"));
+    }
+
+    // ST-B-004 (the tripwire): every tier with a non-zero quorum requirement must
+    // actually HALT the run — Medium included. The old build let a Medium clip run
+    // to completion with no approval (fail-open at a whole tier).
+    #[test]
+    fn medium_tier_halts_the_run_until_approved() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        assert!(
+            policy::quorum_n("medium", &[]) > 0,
+            "medium is a real quorum tier"
+        );
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        // First gate reached is the Medium c2 @ unit 8 — the run is HELD.
+        assert_eq!(s.status, "paused", "medium tier halts the run");
+        assert_eq!(s.pending.as_deref(), Some("c2"));
+        assert_eq!(s.playhead, 8.0, "held exactly at the medium clip start");
+        assert!(!s.approved.contains(&"c2".to_string()), "not approved by merely reaching it");
+
+        // OneOf release: a single non-proposer approval advances it.
+        apply_sign(&mut s, "Reviewer");
+        apply_resume(&mut s);
+        assert_eq!(s.status, "running");
+        assert!(s.approved.contains(&"c2".to_string()), "one approver released the medium gate");
+    }
+
+    // ST-B-004: Approve and Reject are DISTINCT — Reject records the decision and
+    // does not approve; the two do not produce identical state.
+    #[test]
+    fn medium_reject_is_distinct_from_approve() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        assert_eq!(s.pending.as_deref(), Some("c2"));
+        // Reject: drop the gate WITHOUT approving.
+        let id = "c2".to_string();
+        s.medium_rejected.push(id.clone());
+        s.pending = None;
+        s.signatures.clear();
+        s.status = "running".into();
+        assert!(s.medium_rejected.contains(&id), "the rejection is recorded");
+        assert!(!s.approved.contains(&id), "a rejected action is NOT approved");
+    }
+
+    // ST-B-005: the oversight dial is not a decoration. Human-out auto-approves
+    // Low/Medium (its stated scope) while its TTL is live, but High still halts
+    // ("no bypass"); and the TTL self-expires back to Human-in.
+    #[test]
+    fn oversight_human_out_auto_approves_medium_but_high_still_halts() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.oversight = "out".into();
+        s.ttl = 3600;
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        // Medium c2 auto-approved (no pause); the run halts only at the High gate c3.
+        assert_eq!(s.pending.as_deref(), Some("c3"), "high still halts under Human-out");
+        assert!(s.approved.contains(&"c2".to_string()), "medium auto-approved under Human-out");
+    }
+
+    #[test]
+    fn oversight_ttl_expiry_forces_human_in() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.oversight = "out".into();
+        s.ttl = 2;
+        assert!(s.ttl_tick()); // 2 → 1
+        assert_eq!(s.oversight, "out");
+        assert!(s.ttl_tick()); // 1 → 0, expires
+        assert_eq!(s.ttl, 0);
+        assert_eq!(s.oversight, "in", "TTL expiry snaps the dial back to Human-in");
+        // Idle when not Human-out.
+        assert!(!s.ttl_tick());
     }
 
     #[test]
@@ -2082,10 +2291,32 @@ mod tests {
         assert_eq!(policy::quorum_n("critical", &[]), 3);
     }
 
+    // ST-B-001 (RC-8 inversion): the old fixture asserted the DEFAULT build returns
+    // a fabricated `verify_integrity() ok` and a constant tamper break — encoding a
+    // verify-button-that-cannot-fail as correct. The honest default reports that it
+    // verified nothing; the real chain check lives only in `core-live`.
+    #[cfg(not(feature = "core-live"))]
+    #[test]
+    fn audit_verify_default_build_does_not_fabricate_a_verdict() {
+        let frames: Vec<(u64, String, String)> = data::frames()
+            .iter()
+            .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
+            .collect();
+        // No fabricated success…
+        let v = audit_verify::verify(&frames, false);
+        assert!(!v.ok, "a build with no runtime core must not claim the chain verified");
+        assert!(!v.message.contains("verify_integrity() ok"), "no fabricated pass string");
+        assert!(v.message.contains("not verified"), "must say it was not verified: {}", v.message);
+        // …and no fabricated tamper detection either: the toggle cannot invent a break.
+        let t = audit_verify::verify(&frames, true);
+        assert_eq!(t.break_seq, -1, "this build cannot detect a break it never measured");
+        assert!(!t.ok);
+    }
+
+    #[cfg(feature = "core-live")]
     #[test]
     fn audit_verify_clean_and_tampered() {
-        // Same assertions pass under the default (modeled) and `core-live`
-        // (real AuditChain::verify_integrity) builds — the parity guard.
+        // core-live runs the real AuditChain::verify_integrity over a real chain.
         let frames: Vec<(u64, String, String)> = data::frames()
             .iter()
             .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
@@ -2094,14 +2325,10 @@ mod tests {
 
         let ok = audit_verify::verify(&frames, false);
         assert!(ok.ok, "clean chain verifies");
-        assert!(ok.message.contains("12 frames"), "12 verified frames");
         assert_eq!(ok.break_seq, -1);
-        assert!(ok.message.contains("ok"));
 
         let bad = audit_verify::verify(&frames, true);
         assert!(!bad.ok, "tamper detected");
-        assert_eq!(bad.break_seq, 6, "broken link at sequence 6");
-        assert!(bad.message.contains("sequence 6"), "message: {}", bad.message);
     }
 
     #[cfg(feature = "core-live")]
@@ -2112,6 +2339,10 @@ mod tests {
         let st = new_state_with(signing::Roster::seed_demo());
         let mut s = st.borrow_mut();
         std::env::set_var("CITRATE_CAPSULES_DIR", "../citrate-agent-runtime/capsules");
+        // Pre-approve the Medium gates (c2, c4) so the run reaches the High gate
+        // (ST-B-004 made Medium a real gate).
+        s.approved.push("c2".into());
+        s.approved.push("c4".into());
         s.status = "running".into();
         for _ in 0..40 {
             if s.status != "running" {
@@ -2138,7 +2369,7 @@ mod tests {
         let mut s = st.borrow_mut();
         s.pending = Some("c3".into());
         let c3 = s.clip("c3").unwrap();
-        let payload = gate_payload(&c3);
+        let payload = gate_payload_for(&s.run_id, &c3);
 
         live_sign(&mut s, &c3, &payload, "Reviewer");
         assert_eq!(s.signatures.len(), 1, "the real queue accepted Reviewer");
@@ -2175,7 +2406,13 @@ mod tests {
         refresh(&ui, &st.borrow());
         let app = ui.global::<AppState>();
 
-        // PLAY → drive the state machine to the High gate (c3).
+        // PLAY → drive the state machine to the High gate (c3). Pre-approve the two
+        // Medium gates (c2, c4) so this test focuses on the High gate (ST-B-004).
+        {
+            let mut s = st.borrow_mut();
+            s.approved.push("c2".into());
+            s.approved.push("c4".into());
+        }
         st.borrow_mut().status = "running".into();
         for _ in 0..600 {
             if st.borrow().status != "running" {
@@ -2212,12 +2449,19 @@ mod tests {
         refresh(&ui, &st.borrow());
         assert_eq!(st.borrow().status, "done", "run completes");
 
-        // AUDIT → the sealed ledger verifies the completed run.
+        // AUDIT → the sealed-ledger seam produces a verdict. Under core-live it is a
+        // real AuditChain::verify_integrity pass; the default build honestly reports
+        // that it has no runtime core to verify against (audit ST-B-001) — either way,
+        // the seam runs and returns a coherent verdict rather than fabricating one.
         let frames: Vec<(u64, String, String)> = data::frames()
             .iter()
             .map(|f| (f.seq as u64, f.evt.to_string(), f.actor.to_string()))
             .collect();
-        assert!(audit_verify::verify(&frames, false).ok, "audit chain verifies the run");
+        let verdict = audit_verify::verify(&frames, false);
+        #[cfg(feature = "core-live")]
+        assert!(verdict.ok, "core-live audit chain verifies the run");
+        #[cfg(not(feature = "core-live"))]
+        assert!(!verdict.ok && verdict.message.contains("not verified"), "default build is honest about no core");
     }
 
     #[test]
@@ -2289,7 +2533,10 @@ mod tests {
 
         assert_eq!(cfg.workspace, "Team");
         assert!(cfg.runtime.contains("Ollama"));
-        assert_eq!(cfg.capsules, 5, "5 signature-verified capsules installed (rogue rejected)");
+        // ST-B-002 (RC-8 inversion): the old fixture asserted 5 "signature-verified"
+        // capsules from a self-generated trust anchor that installed nothing. No signed
+        // registry is configured in this build, so the honest installed count is 0.
+        assert_eq!(cfg.capsules, 0, "no signed capsule registry ⇒ nothing installed (honest)");
         assert_eq!(cfg.oversight, "on");
         assert!(cfg.onboarding_complete, "completion flag set → next launch skips onboarding");
         assert!(!cfg.first_prompt.is_empty());
@@ -2326,7 +2573,7 @@ mod tests {
         }
         let s = st.borrow();
         let c3 = s.clip("c3").unwrap();
-        let payload = gate_payload(&c3);
+        let payload = gate_payload_for(&s.run_id, &c3);
         // Reviewer is enrolled → real signature that verifies under its pubkey.
         let (sig, _surface) = s.roster.sign_for("Reviewer", &payload).unwrap();
         let pk = s.roster.signer_for("Reviewer").unwrap().pubkey;
@@ -2337,6 +2584,42 @@ mod tests {
         let rows = approval_roster(&st.borrow());
         let rv = rows.iter().find(|r| r.role == "Reviewer").unwrap();
         assert!(rv.disabled && rv.reason.contains("No signer enrolled"));
+    }
+
+    // ST-B-006: the signed gate message must be domain-separated and unique to the
+    // run + action, so an approval signature cannot be replayed across runs or
+    // confused with another protocol's signature over the same bytes.
+    #[test]
+    fn gate_payload_is_domain_separated_and_per_run_unique() {
+        let clips = data::clips();
+        let c3 = clips.iter().find(|c| c.id == "c3").unwrap();
+        let c4 = clips.iter().find(|c| c.id == "c4").unwrap();
+
+        // Domain separation: every gate message carries the approval-domain tag.
+        let p = gate_payload_for("run-A", c3);
+        assert!(
+            std::str::from_utf8(&p).unwrap().starts_with(GATE_APPROVAL_DOMAIN),
+            "gate payload must be domain-tagged"
+        );
+
+        // Per-run uniqueness: the SAME action in two different runs signs different
+        // messages, so a signature from run A does not verify a gate in run B.
+        assert_ne!(
+            gate_payload_for("run-A", c3),
+            gate_payload_for("run-B", c3),
+            "the run id must bind into the signed message"
+        );
+
+        // Per-action uniqueness: two distinct actions in the same run never collide.
+        assert_ne!(
+            gate_payload_for("run-A", c3),
+            gate_payload_for("run-A", c4),
+            "distinct actions must produce distinct signed messages"
+        );
+
+        // Determinism: the same (run, action) is stable (so a legitimate re-check
+        // of the same gate verifies).
+        assert_eq!(gate_payload_for("run-A", c3), gate_payload_for("run-A", c3));
     }
 
     // ---- STUDIO-15 / audit F-1: the policy seam (not the UI) enforces admission ----

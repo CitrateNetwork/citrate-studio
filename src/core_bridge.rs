@@ -342,11 +342,11 @@ mod tests {
 
         let rv = roster.signer_for("Reviewer").unwrap();
         let co = roster.signer_for("ComplianceOfficer").unwrap();
-        // One signature: not enough.
-        assert!(!lq.sign("c3", rv.secret.unwrap(), "Reviewer").unwrap(), "1 of 2");
+        // One signature: not enough. (secret is Zeroizing<[u8;32]> — deref to the seed.)
+        assert!(!lq.sign("c3", *rv.secret.as_ref().unwrap(), "Reviewer").unwrap(), "1 of 2");
         assert_eq!(lq.signature_count("c3"), 1);
         // Two: quorum met through the REAL ApprovalQueue.
-        assert!(lq.sign("c3", co.secret.unwrap(), "ComplianceOfficer").unwrap(), "quorum met end-to-end");
+        assert!(lq.sign("c3", *co.secret.as_ref().unwrap(), "ComplianceOfficer").unwrap(), "quorum met end-to-end");
     }
 
     #[test]

@@ -83,13 +83,23 @@ unmaintained = "all"
 #
 # Inline exceptions (each requires a one-line justification):
 ignore = [
-    # RUSTSEC-2025-0055 — tracing-subscriber <0.3.20 ANSI/log injection
-    # (CWE-117), TRUE POSITIVE Low. Reaches the lock only via the OPTIONAL
-    # `core-live` citrate-agent-core tree; NOT compiled in the default shipping
-    # build. Inherits agent-core's already-tracked advisory (see
-    # citrate-agent-runtime/audit.toml) pending the upstream bump. Full
-    # rationale in this repo's audit.toml.
-    "RUSTSEC-2025-0055",
+    # Vulnerability ignores — mirrors this repo's audit.toml (refreshed 2026-09-07,
+    # audit ST-B-010). `webbrowser` + `crossbeam-epoch` were CLOSED by a cargo update,
+    # not ignored. Each remaining entry is build-time-only or core-live-only; full
+    # reachability rationale is in audit.toml.
+    # DEFAULT graph but BUILD-TIME only (wayland-scanner proc-macro parses trusted
+    # in-tree Wayland XML at build; no runtime input reaches quick-xml):
+    "RUSTSEC-2026-0194", # quick-xml quadratic dup-attribute check (DoS) — build-time
+    "RUSTSEC-2026-0195", # quick-xml ns-decl memory exhaustion (DoS) — build-time
+    # OPTIONAL core-live tree only — not compiled in the shipping build; owner is
+    # citrate-agent-runtime (escalate the wasmtime bump there — 0269 is CVSS 8.8):
+    "RUSTSEC-2025-0055", # tracing-subscriber ANSI/log injection (Low)
+    "RUSTSEC-2026-0269", # wasmtime fs-sandbox escape (trailing slashes), CVSS 8.8
+    "RUSTSEC-2026-0188", # wasmtime-wasi hardlink/rename FilePerms bypass
+    "RUSTSEC-2026-0222", # wasmtime type indices mixed across engines
+    "RUSTSEC-2026-0182", # wasmtime-wasi fd_renumber leak
+    "RUSTSEC-2026-0258", # h2 unbounded empty DATA frames (DoS)
+    "RUSTSEC-2026-0220", # ruint Uint shift overflow flags/truncation
 
     # STUDIO-19 / audit F-7: the 6 transitive UNMAINTAINED advisories below are
     # informational (cargo-audit treats them as non-failing warnings). With
