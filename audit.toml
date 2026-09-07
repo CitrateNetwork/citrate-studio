@@ -13,19 +13,45 @@
 # unmaintained warnings (non-failing); no vulnerabilities in the default build.
 
 [advisories]
+# Refreshed 2026-09-07 (audit ST-B-010) against the current lock. `webbrowser`
+# (RUSTSEC-2026-0257) and `crossbeam-epoch` (RUSTSEC-2026-0204) — both previously
+# open and one of them DEFAULT-reachable — were CLOSED by a `cargo update`
+# (webbrowser 1.2.1→1.2.4, crossbeam-epoch 0.9.18→0.9.21), not ignored. Everything
+# still listed below is either build-time-only or confined to the optional
+# `core-live` tree; each carries its reachability + tracker.
 ignore = [
-    # ─────────────────────────────────────────────────────────────────
-    # RUSTSEC-2025-0055 — tracing-subscriber <0.3.20 ANSI-escape / log
-    # injection (CWE-117). Verdict (upstream): TRUE POSITIVE, severity Low.
-    # ─────────────────────────────────────────────────────────────────
-    # Reaches the lock ONLY via the optional `core-live` dependency on
-    # `citrate-agent-core` (its arkworks/tracing tree). It is NOT compiled in
-    # the default shipping build (the feature is off), so the default binary is
-    # unaffected. Under `core-live` it inherits agent-core's already-tracked
-    # advisory — see `citrate-agent-runtime/audit.toml`, where it is ignored
-    # with the same Low verdict pending the upstream bump. Re-evaluate when
-    # agent-core closes it.
+    # ── DEFAULT graph, but BUILD-TIME only (not reachable by any runtime input) ──
+    # quick-xml <0.40 — RUSTSEC-2026-0195 (namespace-decl memory exhaustion) and
+    # RUSTSEC-2026-0194 (quadratic duplicate-attribute check). Both are DoS on a
+    # parser fed a crafted document. In this crate quick-xml is pulled ONLY by
+    # `wayland-scanner` (a proc-macro) to parse the TRUSTED, in-tree Wayland
+    # protocol XML at BUILD time — studio never feeds it runtime/attacker input.
+    # It is also `^0.39`-pinned by wayland-scanner, so 0.40 cannot be selected
+    # without bumping the winit/Slint backend. Not runtime-reachable ⇒ ignored.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # ── OPTIONAL `core-live` tree ONLY — NOT compiled in the shipping build ──
+    # The default release binary builds with no `--features`, so none of these is
+    # present in a shipped artifact. Their real owner is `citrate-agent-runtime`
+    # (the sibling that vendors wasmtime + the chain crates); escalate the version
+    # constraints there. Tracked here so the default gate is green + documented.
+    # RUSTSEC-2025-0055 — tracing-subscriber <0.3.20 ANSI/log injection (Low).
     "RUSTSEC-2025-0055",
+    # RUSTSEC-2026-0269 — wasmtime 45 filesystem-sandbox escape (trailing slashes),
+    #   CVSS 8.8. HIGH-priority for agent-runtime: it is the WASM sandbox meant to
+    #   contain a capsule. Bump wasmtime there per the advisory. core-live only.
+    "RUSTSEC-2026-0269",
+    # RUSTSEC-2026-0188 — wasmtime-wasi hardlink/rename FilePerms bypass. core-live.
+    "RUSTSEC-2026-0188",
+    # RUSTSEC-2026-0222 — wasmtime type indices mixed across engines. core-live.
+    "RUSTSEC-2026-0222",
+    # RUSTSEC-2026-0182 — wasmtime-wasi fd_renumber leak. core-live.
+    "RUSTSEC-2026-0182",
+    # RUSTSEC-2026-0258 — h2 unbounded empty DATA frames (DoS). core-live.
+    "RUSTSEC-2026-0258",
+    # RUSTSEC-2026-0220 — ruint Uint shift overflow flags/truncation. core-live.
+    "RUSTSEC-2026-0220",
 ]
 
 # Informational "unmaintained" warnings (NOT vulnerabilities; cargo-audit treats

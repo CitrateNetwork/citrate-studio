@@ -45,6 +45,14 @@ tiny_http = "0.12"
 keyring = "2"
 # STUDIO-4 — real ed25519 signer keys (matches the runtime's native scheme).
 ed25519-dalek = "2.1"
+# Wipe ed25519 signer secrets (and the hex strings they pass through) from memory
+# on drop — defence-in-depth against core dumps / swap / a same-user debugger
+# (audit ST-B-008). Already in the lock transitively; pinned here as a direct dep.
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+# HMAC over the OS-keyring token envelope, keyed by a per-install device seal key,
+# so a process that can write only the token entry cannot seat forged claims
+# (audit CIT-STUDIO-01 / ST-B-013). Already in the lock transitively.
+hmac = "0.12"
 
 # STUDIO-3 — the real runtime core, behind the `core-live` feature (off by
 # default). Pulls wasmtime 45 + an SSH-sourced citrate-wallet-core (rev cached
