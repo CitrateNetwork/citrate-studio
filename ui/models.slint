@@ -172,9 +172,11 @@ export global AppState {
     in-out property <bool> scrubber-tampered: false;
     in-out property <int> scrubber-active: 6;
     // audit-chain verdict — computed by the core (real AuditChain::verify_integrity
-    // under core-live; modeled otherwise). break-seq = -1 when the chain verifies.
-    in property <string> scrubber-verdict: "verify_integrity() ok";
-    in property <bool> scrubber-ok: true;
+    // under core-live). break-seq = -1 when the chain verifies. Default build has no
+    // runtime core, so the honest default is "not verified", NOT a fabricated pass
+    // (audit ST-B-001) — Rust's set_audit_verdict overwrites this at startup.
+    in property <string> scrubber-verdict: "not verified — no runtime core";
+    in property <bool> scrubber-ok: false;
     in property <int> scrubber-break-seq: -1;
     callback toggle-tamper();
 
@@ -187,6 +189,7 @@ export global AppState {
     callback sign(/* role */ string);
     callback resume();
     callback medium-approve(/* clip id */ string);
+    callback medium-reject(/* clip id */ string);
     callback toggle-dry(/* clip id */ string);
     callback toggle-solo(/* clip id */ string);
     callback select-clip(/* clip id */ string);

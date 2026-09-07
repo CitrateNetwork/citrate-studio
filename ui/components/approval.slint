@@ -161,7 +161,7 @@ component MediumCard inherits Rectangle {
             padding-left: 13px; padding-right: 13px; padding-bottom: 9px;
             spacing: 7px;
             alignment: end;
-            Btn { text: "Dismiss"; kind: "ghost"; sm: true; clicked => { AppState.medium-approve(root.item.id); } }
+            Btn { text: "Reject"; kind: "ghost"; sm: true; clicked => { AppState.medium-reject(root.item.id); } }
             Btn { text: "Approve"; icon: "check"; kind: "primary"; sm: true; clicked => { AppState.medium-approve(root.item.id); } }
         }
     }

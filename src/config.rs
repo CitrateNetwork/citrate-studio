@@ -210,6 +210,30 @@ pub fn install_capsules(
     (ok, bad)
 }
 
+/// The number of capsules installed from a real, out-of-band-pinned publisher registry.
+///
+/// ST-B-002: a genuine install requires a `PublisherTrustStore` populated from a
+/// signed source of record (CIT-AGENT-3e), whose keys originate OUTSIDE this process.
+/// No such registry is configured in this build, so nothing is installed and the
+/// honest count is 0 — the operator is never told a supply-chain control is in force
+/// when it is not. `install_capsules` + `verify_capsule` remain the seam a real feed
+/// will drive; `demo_capsule_sources_with_trust` is kept for the fail-closed unit
+/// tests only (it must never be presented to an operator as a real install).
+pub fn installed_capsule_count() -> u32 {
+    let registry = pinned_publisher_registry();
+    if registry.is_none() {
+        return 0; // no signed registry configured ⇒ nothing staged, honestly reported
+    }
+    0
+}
+
+/// The out-of-band pinned-publisher registry feed. Returns `None` until CIT-AGENT-3e
+/// wires a signed source of record; a self-generated anchor is deliberately NOT a
+/// substitute (that is the circularity ST-B-002 flagged).
+fn pinned_publisher_registry() -> Option<(Vec<CapsuleSource>, PublisherTrustStore)> {
+    None
+}
+
 /// A demo capsule set signed by a single publisher key + the trust store that pins it, plus
 /// one tampered capsule whose signature won't verify (to exercise fail-closed). Stands in for
 /// a real signed registry feed until CIT-AGENT-3e.

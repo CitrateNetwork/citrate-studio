@@ -322,8 +322,13 @@ export component BreakGlassConsole inherits Rectangle {
                         if i != 0: Text { text: "awaiting ⧗"; font-family: Theme.font-mono; font-size: 11px; color: Theme.sealed-fg-3; vertical-alignment: center; }
                     }
                 }
+                // ST-B-007: this console is a UI PREVIEW — no Rust callback, state, or
+                // audit record backs it, and the two enforcement rules previously asserted
+                // here ("SecurityOfficer cannot self-affirm", "ITAR manifests hard-blocked")
+                // are NOT implemented anywhere. Do not state controls the product does not
+                // enforce; label the panel honestly as a design preview instead.
                 SelectableText {
-                    text: "The invoking SecurityOfficer cannot self-affirm. ITAR-touching manifests are hard-blocked from this path entirely.";
+                    text: "Design preview — no privileged break-glass path is wired in this build. Self-affirmation and ITAR hard-block are not yet enforced; a live path will route through the policy seam (admit_signature), not this panel.";
                     wrap: word-wrap; single-line: false;
                     font-size: 11px; color: Theme.sealed-fg-3;
                 }
