@@ -1,170 +1,129 @@
-# Citrate Studio
+# citrate-studio
 
-**The native agent-harness interface for the Citrate runtime — a Slint port of the
-`Citrate Studio.html` design prototype, built as the forward-looking UI kit for every
-Citrate native app.**
+> The native agent-harness desktop app for the Citrate Network — drive a compliance-first agent, with the transformer at the top (L0 chat) and the calldata at the bottom (L4 code).
 
-Citrate Studio is a creative tool for driving a compliance-first agent: it hides the
-transformer at the top (L0 chat) and reveals the calldata at the bottom (L4 code), where
-every layer down trades one abstraction for one truth. The compliance the runtime enforces
-— hash-pinned approvals, the quorum lattice, the 11 doctor checks, the 9 tripwires, the
-frame-accurate audit replay — becomes the most beautiful thing on screen rather than the
-most buried.
+## What it is
 
-It descends from the **Citrate Marketplace design system** (warm paper, citric-green
-wax-seal accents, the lattice motif, mono compliance labels) and renders the
-`citrate-agent-runtime` primitives directly: every value on screen traces to a struct,
-enum, or function named in `CITRATE_STUDIO_DESIGN_SPEC.md`.
+Citrate Studio is a Rust + [Slint](https://slint.dev) native desktop application: the interface for driving a Citrate agent and the reference UI kit for every Citrate native app. It renders the runtime's compliance primitives — hash-pinned approvals, the quorum lattice, doctor checks, tripwires, and frame-accurate audit replay — directly on screen, while a Rust core computes every policy decision (the front end never makes one). By default Studio runs a *modeled* in-process core; under the `core-live` feature it delegates to the real [`citrate-agent-core`](https://github.com/CitrateNetwork/citrate-agent-runtime) runtime.
 
-> **Status (9 sprints in).** A hardened release candidate: real auth, real policy core,
-> real signer roster, persistent setup, real `ApprovalQueue` / capsule dispatch / chain
-> reads / Doctor (all against `citrate-agent-core` under `core-live`), zero dead code, and
-> a headless e2e harness. Both builds green, 35 / 39 tests. The exact map of *real vs
-> modeled vs gated* — and what remains for `v1.0.0` — is in **[`COMPLETION_STATUS.md`](COMPLETION_STATUS.md)**;
-> packaging/release in **[`RELEASE.md`](RELEASE.md)**. The full build trail (spec → tests →
-> code → retro → journal → essay per sprint) is under `.agentile/sprints/completed/` +
-> `docs/`.
->
-> **Rust modules:** `auth` (OIDC/SIWE) · `signing` (ed25519 roster) · `config` (persisted
-> setup + runtime probe + capsule verify) · `chain` (live 40204 reads) · `core_bridge`
-> (the real-core seams, `core-live`) · `data` (demo catalog) · `main` (shell + intents +
-> state machine).
+It anchors audit roots to the Citrate chain (id **40204**) and authenticates against [citrate-identity](https://github.com/CitrateNetwork/citrate-identity) via OIDC/SIWE. See the concept overview at https://docs.citrate.ai/apps.
 
----
+## Prerequisites
 
-## What's here
+Studio is a pure Cargo/Slint build — **no Node.js, no GPU, no OpenSSL** (Slint uses its software renderer; auth uses `ureq` + `rustls`).
 
-This is a native Rust + **Slint 1.16** application. It is a **viewport + intent submitter**
-(per the design spec's trust boundary): the UI renders state and submits intents; a Rust
-"core" (modeled here with in-memory data + a playback loop) decides quorum / approval /
-separation-of-duties. The UI never computes "approved."
+```bash
+# Rust stable (pinned by rust-toolchain.toml) + Cargo
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup component add rustfmt clippy
 
-### Built and verified
+# Linux: an OS keyring service (GNOME Keyring / KWallet) is used to store OIDC tokens.
+# macOS/Windows use the system keychain — no extra packages.
 
-| Layer | Surface | Status |
-|---|---|---|
-| **Foundation** | design tokens (`theme.slint`), typography with **selectable text** (`SelectableText` = read-only `TextInput`, fixing the "can't highlight" gap in other Citrate Slint apps), the full path-based icon set, capability glyphs, risk/data-class/role/severity primitives, buttons, cards | ✅ |
-| **Shell** | evergreen chrome, brand, L0→L4 depth breadcrumb, Beginner/Advanced workspace toggle, the always-ambient Health Strip (doctor LED + 9 tripwire lamps + break-glass), responsive column collapse | ✅ |
-| **L1 Composition Canvas** | the timeline: lanes, clips with risk bands + capability glyphs, keyframe diamonds (Quorum gates), output cards blooming on completion, the sweeping playhead, transport, run status, dry-run / solo lane controls, the live tripwire-fired marker | ✅ |
-| **Sealed Audit Scrubber** | the evergreen ledger zone: frame spine, `verify_integrity()` verdict, **simulate-tamper** → broken-link at the exact sequence, per-frame AuditRecord + RoleSignature detail | ✅ |
-| **L3 Approval Dock** | the four risk-tier presentations (Low auto-feed · Medium ambient card · High quorum card with live signatures + SoD + the hash pin · Critical modal), the oversight dial with TTL countdown | ✅ |
-| **L2 Inspector** | the AE twirl-down idiom over a capsule's Manifest (capabilities, data classes, risk, overlay, procedure, provenance → links to L4) | ✅ |
-| **L4 Code Drawer** | the literal `manifest.toml` / `capsule.wit` / decoded calldata, with the live WIT/manifest revalidation (`wasm-linker-recheck`) blocker | ✅ |
-| **Health Report** | the signed Doctor report (11 named checks) + the 9 FedRAMP tripwires with on-chain firing refs | ✅ |
-| **Break-Glass Console** | the SecurityOfficer emergency path: phase spine, 72h affirmation countdown, the {Reviewer, ComplianceOfficer} quorum, the ITAR hard-block note | ✅ |
-| **L0 Beginner chat** | the chat-first workspace — agent bubbles, quick replies, the scripted "run the reconciliation" flow with an **inline HITL approval card** (reusing the global gate + SoD), the outcome card, and "Open Studio" | ✅ |
-| **Agent chat drawer** | the Advanced-mode L0 slide-in over the two-zone body | ✅ |
-| **Settings + RBAC** | org→team→member roster with live add/drop (a dropped member keeps their personal workspace), signer roster, capability-grant AGT-14 drift, runtime/models, policy & anchoring | ✅ |
-| **Conversational onboarding** | the first-run scripted setup — agent on the left, a live 6-step checklist + progress on the right; by the last step you've already prompted successfully | ✅ |
-| **Playback state machine** | the `SPEED`/`TICK` loop (gate pause, medium queue, auto-feed, tripwire fire), all intents wired (sign / resume / approve / dry / solo / select / depth / chat / rbac / onboard) | ✅ |
+# For packaging installers (optional):
+cargo install cargo-bundle --locked
+```
 
-The full prototype (`Citrate Studio.html`) is ported. Live-model chat (`window.claude.complete`)
-is replaced by the prototype's in-character local fallback; wire it to the real agent loop
-when `citrate-agent-core` lands its L0.
+No system GPU/skia/OpenSSL packages are required.
 
----
+## Build from source
 
-## Run it
+```bash
+git clone https://github.com/CitrateNetwork/citrate-studio
+cd citrate-studio
 
-```sh
+# Default build — modeled (in-process) core, no wasmtime, fast:
+cargo build
+
+# Production binary — stripped, LTO, opt-level 3:
+cargo build --release --locked
+# Artifact: target/release/citrate-studio
+
+# Build against the REAL agent runtime (pulls wasmtime + citrate-wallet-core):
+cargo build --features core-live
+
+# Tests:
+cargo test --locked                    # default (modeled) core
+cargo test --features core-live        # parity against the real core
+```
+
+Packaged installers land under `target/release/bundle/**`:
+
+```bash
+cargo bundle --release --format deb    # Linux .deb  (or: osx | msi)
+# macOS -> "Citrate Studio.app", Windows -> .msi; bundle id ai.citrate.studio
+```
+
+## Run locally
+
+Studio is a native desktop app — it opens a window, it does **not** serve an HTTP port.
+
+```bash
 cargo run
 ```
 
-A native window opens with the **Advanced** two-zone workspace and the
-`SOP-RECON-NIGHTLY` demo run. Press **play** (▶) in the canvas transport to watch the
-playhead sweep: Low/Medium steps clear, the **High** PHI cross-match pauses for a 2-of-N
-quorum (sign in the right-hand dock), `TRIP-AU-002` fires mid-run, and every step lands in
-the sealed ledger below. Click a clip for the **Inspector**; the provenance twirl opens the
-**Code Drawer**. Click the depth breadcrumb (L0…L4), the health strip, or BREAK-GLASS to
-descend.
+This opens the two-zone workspace with a demo run loaded. To verify a headless build renders correctly, capture a screenshot instead of opening a window:
 
-### Architecture
-
-```
-src/main.rs        — window setup, the RunState "core", playback loop, all intents, SoD,
-                     headless-snapshot dev tool
-src/data.rs        — the demo catalog (clips, 17 tools, capsules, frames, 11 doctor checks,
-                     9 tripwires, signer roster) — mirrors studio-data.js
-ui/theme.slint     — design tokens (1:1 with tokens.css + studio.css)
-ui/typography.slint— SelectableText + text styles
-ui/icons.slint     — AppIcon / CapGlyph (single-Path, 24×24 viewbox)
-ui/primitives.slint— risk badges, data chips, role glyphs, keyframes, buttons, cards
-ui/models.slint    — AppState global: data, run state, UI state, intents
-ui/studio.slint    — the app shell (two-zone body, responsive, view + overlay routing)
-ui/components/      — chrome, palette, canvas, scrubber, approval, inspector, overlays
-                     (code/health/break-glass), chat (Beginner + drawer), settings, onboarding
-assets/fonts/      — Geist, Geist Mono, Space Grotesk, Cormorant (embedded at compile time)
-assets/brand/      — the C-mark
+```bash
+CITRATE_STUDIO_SHOT=out.png cargo run
+# Optional demo seeding: CITRATE_STUDIO_SEED=gate|done|running
+#                        CITRATE_STUDIO_OVERLAY=code|health|breakglass|settings|chat
 ```
 
-The trust boundary is explicit: **the front end never makes a policy decision.** Quorum,
-SoD (CO ⊥ SO, Auditor never approves, no self-approval), and the hash-pin are computed in
-`main.rs` and handed to the UI as ready-to-render state (`approval-roster`, `quorum-met`).
-When this is wired to the real `citrate-agent-core`, those computations move behind the
-Rust core unchanged — the UI is already only a viewport.
+A non-empty `out.png` confirms the UI kit built and rendered.
 
-### Wiring the real core (`core-live`) — STUDIO-3 (closed)
+## Connect it locally
 
-The real `citrate-agent-core` is an **optional, feature-gated** dependency so the
-default build stays fast (no `wasmtime`, no SSH dep):
+Studio is a desktop client that talks to three upstreams. By default it points at the public testnet (`rpc.citrate.ai`, `auth.citrate.ai`) and a modeled core, so it runs standalone out of the box. To wire it to a **local** stack:
 
-```sh
-cargo build                      # default — modeled core, fast
-cargo build --features core-live # real citrate-agent-core (wasmtime 45 + cached wallet-core)
-```
+1. **Chain RPC (chain 40204)** — Studio reads/anchors against a JSON-RPC endpoint. It ships pointed at `https://rpc.citrate.ai`; to exercise the live path locally, run a local devnet node from [citrate-chain](https://github.com/CitrateNetwork/citrate-chain) and opt into the live RPC/anchor path:
 
-The integration grows through a **policy seam** (`policy` in `main.rs` + `core_bridge.rs`):
-separation-of-duties and quorum compute through `policy::{is_conflict, can_approve,
-quorum_n}` — the default is a faithful hand-rolled copy of the runtime's rules; under
-`core-live` it delegates to the authoritative `citrate_agent_core`. Callers don't know
-which is compiled — the concrete proof that wiring the real core is a *swap*, not a
-rewrite. **STUDIO-3 wired every pure policy + verification surface** the UI renders:
-separation-of-duties (`hitl::is_conflict`), the quorum tier shape + count
-(`Quorum::for_tier`), the quorum **decision** (`Quorum::satisfied_by`), and audit
-integrity (`AuditChain::verify_integrity` — the scrubber's verdict + tamper detection are
-the runtime's own). Each is guarded by a parity test that passes under **both** feature
-builds (`cargo test` and `cargo test --features core-live`). The *execution* surfaces
-(stateful async `ApprovalQueue`, `DoctorReport` against a live context, `CapsuleDispatch`,
-`RecorderClient`) need a real runtime environment and land in STUDIO-5/6. See
-`.agentile/sprints/completed/2026-06/STUDIO-3-core-wiring.md`.
+   ```bash
+   export CITRATE_LIVE_RPC=1          # run the live RPC check
+   export CITRATE_ANCHOR_LIVE=1       # perform a real on-chain anchor
+   export CITRATE_ANCHOR_KEY=<hex-privkey-funded-on-40204>
+   ```
 
-### Auth (STUDIO-2, closed)
+2. **Identity / OIDC** — point Studio's OIDC issuer at a locally-running [citrate-identity](https://github.com/CitrateNetwork/citrate-identity):
 
-Sign-in is OIDC + SIWE against `citrate-identity` (registered as the native first-party
-client `citrate-studio`, loopback PKCE per RFC 8252). The pure scaffold ships
-(`src/auth.rs`: PKCE, tokens, store, `signer_id`); the network/keyring/UI land in a later
-STUDIO-2 commit. See `.agentile/adrs/ADR-2026-06-04-auth-oidc-siwe.md`.
+   ```bash
+   export CITRATE_STUDIO_ISSUER=http://localhost:3000   # default: https://auth.citrate.ai
+   ```
 
-### Dev: headless screenshots
+   Studio uses loopback PKCE (RFC 8252) with `client_id=citrate-studio`; tokens are stored in the OS keyring.
 
-This shell has no window surface, so the app renders headlessly via the software renderer:
+3. **Agent core** — to drive the real runtime instead of the modeled one, build with `--features core-live` (path dep on `../citrate-agent-runtime/agent/core`) and point capsules at a local directory:
 
-```sh
-CITRATE_STUDIO_SHOT=out.png \
-  [CITRATE_STUDIO_SEED=gate|done|running] \
-  [CITRATE_STUDIO_SELECT=c3] \
-  [CITRATE_STUDIO_OVERLAY=code|health|breakglass|settings|chat] \
-  [CITRATE_STUDIO_VIEW=onboard] [CITRATE_STUDIO_WS=beginner] \
-  cargo run
-```
+   ```bash
+   cargo run --features core-live
+   export CITRATE_CAPSULES_DIR=./capsules
+   ```
 
-Toggle **Beginner/Advanced** in the header; in Beginner, "Setup" replays the conversational
-onboarding, and the settings gear opens **Settings + RBAC**.
+4. **Local model runtime (optional)** — Studio auto-discovers local model servers for L0 chat: [Ollama](https://ollama.com) at `http://localhost:11434` and llama.cpp at `http://localhost:8080`. Start one to enable live model output.
 
----
+For the full multi-repo bring-up see `LOCAL_STACK.md` in [citrate-docs](https://github.com/CitrateNetwork/citrate-docs).
 
-## Renderer
+## Configuration
 
-Uses Slint's **software renderer** (winit backend) — matching `citrate-gui-native`,
-pure-CPU, no GPU/`skia` build dependency, and it renders headlessly for review. Swap
-`renderer-femtovg` (GPU) or `renderer-skia` (max text fidelity) in `Cargo.toml` for the
-shipped desktop build if desired.
+Studio has **no `.env` file** — configuration is environment variables plus a TOML written to the platform config dir (`…/citrate-studio/citrate-studio.toml`) during onboarding.
 
-## Design fidelity
+| Variable | Default | Purpose |
+|---|---|---|
+| `CITRATE_STUDIO_ISSUER` | `https://auth.citrate.ai` | OIDC issuer (identity) |
+| `CITRATE_LIVE_RPC` | unset | `=1` runs the live RPC test against the configured node |
+| `CITRATE_ANCHOR_LIVE` | unset | `=1` performs a real on-chain anchor (chain 40204) |
+| `CITRATE_ANCHOR_KEY` | — | signing key for on-chain anchoring |
+| `CITRATE_CAPSULES_DIR` | — | capsule (skill) source directory |
+| `CITRATE_STUDIO_SHOT` | unset | render one headless screenshot to the given path and exit |
 
-Built to match `Citrate Studio.html` 1:1: the warm-paper / evergreen two-zone law, the
-risk-tier color+keyframe system, Space Grotesk titles / Geist UI / Geist Mono data /
-Cormorant empty-state prose, hairlines over shadows, and **selectable, copyable text
-everywhere it's content** (hashes, DIDs, outputs, code). Responsiveness is driven off the
-window width via `changed` handlers (Slint has no media queries), collapsing the palette
-and dock at narrow widths.
+Chain constants are compiled in: `RPC_URL=https://rpc.citrate.ai`, `CHAIN_ID=40204` (`src/chain.rs`). Dev/demo seeding vars (`CITRATE_STUDIO_SEED`, `_OVERLAY`, `_VIEW`, `_WS`, …) are documented in `src/config.rs`.
+
+## Links
+
+- Docs: https://docs.citrate.ai/apps
+- Depends on: [citrate-agent-runtime](https://github.com/CitrateNetwork/citrate-agent-runtime) (agent core) · [citrate-identity](https://github.com/CitrateNetwork/citrate-identity) (OIDC/SIWE) · [citrate-chain](https://github.com/CitrateNetwork/citrate-chain) (RPC, chain 40204)
+- Contributing (DCO): CONTRIBUTING.md · Security: SECURITY.md · License: LICENSE
+
+## License
+
+Source-available (BUSL-1.1) — free for personal/non-commercial use; commercial use requires a Citrate membership. This is **not** an open-source license.
