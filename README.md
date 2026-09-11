@@ -1,5 +1,7 @@
 # citrate-studio
 
+*Part of the **[Citrate Network](https://citrate.ai)** — own the means of computation. · [Docs](https://docs.citrate.ai) · [Run a node](https://citrate.ai/download) · [Contribute → free membership](https://github.com/CitrateNetwork/.github/blob/main/CONTRIBUTING.md)*
+
 > The native agent-harness desktop app for the Citrate Network — drive a compliance-first agent, with the transformer at the top (L0 chat) and the calldata at the bottom (L4 code).
 
 ## What it is
