@@ -57,7 +57,7 @@ jobs:
     env:
       # Bump when studio's Cargo.lock pins a new chain rev; keep this agent-runtime rev's
       # own lock in sync with that chain rev (its lock must pin the same chain commit).
-      AGENT_RUNTIME_REV: 56c4f6b162f435ed6229fddf45a61f0ecdf610a1
+      AGENT_RUNTIME_REV: eb8e68586c28c05aadb5b27f48c5178dbe1a553a
       # cargo's built-in git backend (libgit2/libssh2) does NOT read ~/.ssh/config host
       # aliases, so it can't resolve `github-citrate-chain`. Force the system `git` CLI,
       # which honours the alias + IdentityFile configured above (same one the clone step uses).
