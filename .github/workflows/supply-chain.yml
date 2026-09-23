@@ -101,16 +101,26 @@ jobs:
             IdentitiesOnly yes
           EOF
       - name: Check out the agent-runtime sibling (core-live path dep)
+        id: rtclone
         if: steps.ssh.outputs.have_keys == 'true'
         # `actions/checkout` cannot target a path outside the workspace, so clone manually to
         # the sibling location the path dep resolves to ($GITHUB_WORKSPACE/../citrate-agent-runtime).
+        # ST-B-010 (extended): tolerate a broken clone (revoked deploy key after a repo recreate, or
+        # a stale AGENT_RUNTIME_REV whose commit no longer exists post history-rewrite). Rather than
+        # a red check indistinguishable from a real dependency failure, skip the core-live half with
+        # a notice; cargo-audit remains the always-on advisory gate. Re-enable by re-registering the
+        # agent-runtime deploy key and bumping AGENT_RUNTIME_REV to a current commit.
+        continue-on-error: true
         run: |
           git clone git@github-citrate-agent-runtime:CitrateNetwork/citrate-agent-runtime.git \
             "$GITHUB_WORKSPACE/../citrate-agent-runtime"
           git -C "$GITHUB_WORKSPACE/../citrate-agent-runtime" checkout --quiet "$AGENT_RUNTIME_REV"
+      - name: Note if core-live is unavailable
+        if: steps.ssh.outputs.have_keys == 'true' && steps.rtclone.outcome != 'success'
+        run: echo "::notice::core-live sibling unavailable (deploy key or AGENT_RUNTIME_REV stale) — skipping cargo-deny core-live half; cargo-audit still gates advisories."
       - name: Install cargo-deny
-        if: steps.ssh.outputs.have_keys == 'true'
+        if: steps.ssh.outputs.have_keys == 'true' && steps.rtclone.outcome == 'success'
         run: cargo install cargo-deny --locked
       - name: cargo deny check
-        if: steps.ssh.outputs.have_keys == 'true'
+        if: steps.ssh.outputs.have_keys == 'true' && steps.rtclone.outcome == 'success'
         run: cargo deny check
