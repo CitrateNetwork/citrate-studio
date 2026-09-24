@@ -945,7 +945,7 @@ fn onboard_apply(cfg: &mut config::Config, id: &str, value: &str, input: &str, t
     match id {
         "workspace" => {
             cfg.workspace = if team { "Team".into() } else { "Personal".into() };
-            cfg.tenant = "BOEING · PROCUREMENT #14".into();
+            cfg.tenant = "defense_prime · PROCUREMENT #14".into();
         }
         "runtime" => cfg.runtime = value.to_string(),
         "capsules" => {

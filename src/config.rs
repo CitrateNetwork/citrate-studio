@@ -265,7 +265,7 @@ mod tests {
     fn toml_roundtrips() {
         let c = Config {
             workspace: "Team".into(),
-            tenant: "BOEING · PROCUREMENT #14".into(),
+            tenant: "defense_prime · PROCUREMENT #14".into(),
             runtime: "Ollama :11434".into(),
             oversight: "on".into(),
             capsules: 5,
