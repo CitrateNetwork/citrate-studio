@@ -62,3 +62,7 @@ ignore = [
 #   RUSTSEC-2024-0384 instant      — transitive
 #   RUSTSEC-2024-0436 paste        — transitive (wasmtime, under core-live)
 #   RUSTSEC-2025-0124 rand_os      — transitive
+#   RUSTSEC-2026-0192 ttf-parser   — transitive, Linux/Wayland CSD only (winit 0.30 →
+#                                    sctk-adwaita 0.10 → ab_glyph); review by 2026-12-31
+#                                    (see deny.toml). RUSTSEC-2026-0206 rustybuzz was
+#                                    CLOSED 2026-09-24 by the Slint 1.16 → 1.18 bump.

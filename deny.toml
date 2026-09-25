@@ -111,6 +111,24 @@ ignore = [
     "RUSTSEC-2024-0384", # instant unmaintained — via keyring→zbus→async-io
     "RUSTSEC-2024-0436", # paste unmaintained — via image→ravif (Slint) + wasmtime (core-live)
     "RUSTSEC-2025-0124", # rand_os unmaintained — via bip39→citrate-wallet-core (core-live)
+
+    # 2026-09-24 (pre-bounty audit remediation, 2026-09-24-prebounty-adversarial-audit):
+    # RUSTSEC-2026-0192 — ttf-parser 0.25 UNMAINTAINED (informational; no CVE, no
+    # vulnerable-version range, so there is no "fixed version" to upgrade to).
+    # Sibling RUSTSEC-2026-0206 (rustybuzz unmaintained) was CLOSED, not ignored, by
+    # bumping Slint 1.16 → 1.18 (resvg/usvg 0.48 moved to harfrust + skrifa).
+    # The one remaining path is Linux/Wayland-only:
+    #   slint backend-winit-wayland → winit 0.30.13 (feature wayland-csd-adwaita)
+    #   → sctk-adwaita 0.10 → ab_glyph 0.2.32 → owned_ttf_parser → ttf-parser.
+    # winit 0.30.x (latest stable) hard-pins sctk-adwaita ^0.10, which has no
+    # skrifa backend (0.12 does, but only winit 0.31 — still beta — can select it).
+    # Not exploitable here: ttf-parser there only rasterises the title-bar text of the
+    # client-side window decoration from a trusted system font (fontconfig); studio
+    # never feeds it user- or network-supplied font data. Not compiled on macOS/Windows.
+    # Dropping `backend-winit-wayland` would remove native Wayland support, so ignore.
+    # EXPIRES / REVIEW BY 2026-12-31, or earlier once Slint ships on winit 0.31 stable
+    # (sctk-adwaita 0.12 / skrifa) — then delete this entry.
+    "RUSTSEC-2026-0192", # ttf-parser unmaintained — winit→sctk-adwaita (Linux/Wayland CSD only)
 ]
 
 [bans]
