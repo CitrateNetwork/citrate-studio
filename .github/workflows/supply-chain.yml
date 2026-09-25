@@ -28,7 +28,7 @@ jobs:
     name: cargo audit (advisory gate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       # The ignore set is the documented, reachability-annotated list in audit.toml
@@ -63,7 +63,7 @@ jobs:
       # which honours the alias + IdentityFile configured above (same one the clone step uses).
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Configure SSH for the private sources
         id: ssh
         # Two read-only deploy keys: one to CLONE the agent-runtime sibling (the path dep),

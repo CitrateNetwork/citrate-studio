@@ -20,9 +20,11 @@ jobs:
   visual:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Pillow (image diff)
         # The macOS runner's Python is Homebrew-managed (PEP 668), so a bare
         # `pip3 install` is refused ("externally-managed-environment"). Install into
@@ -35,7 +37,7 @@ jobs:
         run: scripts/visual-harness.sh check
       - name: Upload gallery + diffs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: visual-gallery
           path: docs/visual/gallery/**
