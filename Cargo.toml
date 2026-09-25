@@ -21,7 +21,7 @@ path = "src/main.rs"
 # compat-1-2 surface + accessibility. No "weird" deps: this is the
 # standard desktop path. Skia can be swapped in for max text fidelity
 # by replacing default-features with the renderer-skia feature.
-slint = { version = "1.16", default-features = false, features = [
+slint = { version = "1.18", default-features = false, features = [
     "compat-1-2",
     "backend-winit",
     "renderer-software",
@@ -74,7 +74,7 @@ core-live = ["dep:citrate-agent-core", "dep:tokio", "dep:wasmtime"]
 dev-filebacked = []
 
 [build-dependencies]
-slint-build = "1.16"
+slint-build = "1.18"
 # The shared design-system crate (theme/typography/icons/primitives + fonts).
 # studio's build.rs reads its published @citrate-ui-kit library path.
 citrate-studio-ui-kit = { path = "ui-kit" }

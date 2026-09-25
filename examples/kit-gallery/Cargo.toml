@@ -11,8 +11,8 @@ name = "kit-gallery"
 path = "src/main.rs"
 
 [dependencies]
-slint = { version = "1.16", default-features = false, features = ["compat-1-2", "backend-winit", "renderer-software", "std"] }
+slint = { version = "1.18", default-features = false, features = ["compat-1-2", "backend-winit", "renderer-software", "std"] }
 
 [build-dependencies]
-slint-build = "1.16"
+slint-build = "1.18"
 citrate-studio-ui-kit = { path = "../../ui-kit" }
