@@ -1005,6 +1005,13 @@ mod tests {
         assert!(open_sealed_token(&key, &tampered).is_none(), "tamper detected");
         // a legacy unsealed value is rejected (fail-closed → fresh login)
         assert!(open_sealed_token(&key, json).is_none());
+        // a truncated or empty MAC is rejected, not compared over the shorter length
+        let v: serde_json::Value = serde_json::from_str(&sealed).unwrap();
+        let mac = v["mac"].as_str().unwrap().to_string();
+        for bad in [&mac[..mac.len() - 2], &mac[..1], ""] {
+            let forged = serde_json::json!({ "v": 1, "mac": bad, "token": json }).to_string();
+            assert!(open_sealed_token(&key, &forged).is_none(), "short MAC {bad:?} accepted");
+        }
     }
 
     // CIT-STUDIO-01 (the tripwire): session_from_store must reject a stored token

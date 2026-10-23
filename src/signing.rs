@@ -576,6 +576,9 @@ mod tests {
         let dbg = format!("{s:?}");
         assert!(dbg.contains("<redacted>"), "secret must render redacted: {dbg}");
         assert!(!dbg.contains(&hex), "the private-key hex must never appear in Debug output");
+        // ...nor in any other rendering of the raw bytes (decimal array form).
+        assert!(!dbg.contains(&format!("{:?}", &raw[..])), "raw key bytes leaked: {dbg}");
+        assert!(!dbg.contains(&format!("{:?}", &raw[..8]).trim_end_matches(']').to_string()));
         // and the whole roster's Debug (derived) inherits the redaction
         assert!(!format!("{r:?}").contains(&hex));
     }

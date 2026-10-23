@@ -634,6 +634,36 @@ fn apply_resume(s: &mut RunState) {
     s.status = "running".into();
 }
 
+/// The Medium card's "Approve" intent (shared by the `on_medium_approve` callback
+/// and the tests). ST-B-004: a Medium gate is OneOf — a single non-proposer
+/// approval releases it. Route through the SAME policy seam as High
+/// (apply_sign → apply_resume), so the run only advances when the core's quorum is
+/// satisfied; do not just dismiss the card.
+fn apply_medium_approve(s: &mut RunState, id: &str) {
+    if s.pending.as_deref() == Some(id) {
+        apply_sign(s, "Reviewer");
+        apply_resume(s);
+    }
+    s.medium.retain(|x| x != id);
+}
+
+/// The Medium card's "Reject" intent (shared by the `on_medium_reject` callback
+/// and the tests). ST-B-004: Reject is a DISTINCT action from Approve — it records
+/// the decision and drops the gate WITHOUT approving, and the action is not
+/// dispatched.
+fn apply_medium_reject(s: &mut RunState, id: &str) {
+    if !s.medium_rejected.iter().any(|x| x == id) {
+        s.medium_rejected.push(id.to_string());
+    }
+    if s.pending.as_deref() == Some(id) {
+        s.pending = None;
+        s.signatures.clear();
+        s.sign_error.clear();
+        s.status = "running".into();
+    }
+    s.medium.retain(|x| x != id);
+}
+
 fn approval_roster(st: &RunState) -> Vec<ApprovalRow> {
     let pending = match &st.pending {
         Some(id) => match st.clip(id) {
@@ -1461,33 +1491,10 @@ fn main() -> Result<(), slint::PlatformError> {
         apply_sign(&mut st.borrow_mut(), role.as_ref());
     });
     on!(on_medium_approve, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
-        // ST-B-004: a Medium gate is OneOf — a single non-proposer approval releases
-        // it. Route through the SAME policy seam as High (apply_sign → apply_resume),
-        // so the run only advances when the core's quorum is satisfied; do not just
-        // dismiss the card.
-        let mut s = st.borrow_mut();
-        let id = id.to_string();
-        if s.pending.as_deref() == Some(id.as_str()) {
-            apply_sign(&mut s, "Reviewer");
-            apply_resume(&mut s);
-        }
-        s.medium.retain(|x| x != &id);
+        apply_medium_approve(&mut st.borrow_mut(), id.as_ref());
     });
     on!(on_medium_reject, |st: &Rc<RefCell<RunState>>, id: &SharedString| {
-        // ST-B-004: Reject is a DISTINCT action from Approve — it records the decision
-        // and drops the gate WITHOUT approving, and the action is not dispatched.
-        let mut s = st.borrow_mut();
-        let id = id.to_string();
-        if !s.medium_rejected.contains(&id) {
-            s.medium_rejected.push(id.clone());
-        }
-        if s.pending.as_deref() == Some(id.as_str()) {
-            s.pending = None;
-            s.signatures.clear();
-            s.sign_error.clear();
-            s.status = "running".into();
-        }
-        s.medium.retain(|x| x != &id);
+        apply_medium_reject(&mut st.borrow_mut(), id.as_ref());
     });
     // ---- signer roster (STUDIO-4): enroll generates a real ed25519 key ----
     {
@@ -2211,6 +2218,103 @@ mod tests {
         // Medium c2 auto-approved (no pause); the run halts only at the High gate c3.
         assert_eq!(s.pending.as_deref(), Some("c3"), "high still halts under Human-out");
         assert!(s.approved.contains(&"c2".to_string()), "medium auto-approved under Human-out");
+    }
+
+    // Human-out only auto-approves while its TTL is live: with the TTL spent, a
+    // Medium gate halts for a human again.
+    #[test]
+    fn human_out_with_an_expired_ttl_still_gates_medium() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.oversight = "out".into();
+        s.ttl = 0;
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        assert_eq!(s.pending.as_deref(), Some("c2"), "medium halts once the TTL is spent");
+        assert!(!s.approved.contains(&"c2".to_string()));
+    }
+
+    // The Medium card's Reject (the real callback body): the action is recorded as
+    // declined, never approved, and the run does not stop on it a second time.
+    #[test]
+    fn rejected_medium_is_never_approved_or_regated() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        assert_eq!(s.pending.as_deref(), Some("c2"));
+        apply_medium_reject(&mut s, "c2");
+        assert_eq!(s.status, "running");
+        assert!(s.medium_rejected.contains(&"c2".to_string()));
+        // Keep playing (rewinding over the boundary as a scrub would): c2 must not
+        // re-gate, and the run next halts at the High gate.
+        s.playhead = 0.0;
+        for _ in 0..800 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+            assert_ne!(s.pending.as_deref(), Some("c2"), "a rejected action re-gated");
+        }
+        assert!(!s.approved.contains(&"c2".to_string()), "a rejected action is NOT approved");
+        assert_eq!(s.pending.as_deref(), Some("c3"));
+    }
+
+    // The Medium card's Approve (the real callback body) goes through the quorum
+    // seam: with no enrolled signer it cannot release the gate.
+    #[test]
+    fn medium_approve_cannot_release_without_an_enrolled_signer() {
+        let st = new_state_with(signing::Roster::default());
+        let mut s = st.borrow_mut();
+        s.status = "running".into();
+        for _ in 0..400 {
+            if s.status != "running" {
+                break;
+            }
+            s.tick();
+        }
+        assert_eq!(s.pending.as_deref(), Some("c2"));
+        apply_medium_approve(&mut s, "c2");
+        assert_eq!(s.status, "paused", "no signer, no quorum, no release");
+        assert_eq!(s.pending.as_deref(), Some("c2"));
+        assert!(!s.approved.contains(&"c2".to_string()));
+
+        // With the demo roster the same intent does release it.
+        let st2 = state();
+        let mut s2 = st2.borrow_mut();
+        s2.status = "running".into();
+        for _ in 0..400 {
+            if s2.status != "running" {
+                break;
+            }
+            s2.tick();
+        }
+        apply_medium_approve(&mut s2, "c2");
+        assert!(s2.approved.contains(&"c2".to_string()));
+    }
+
+    // Each run gets a fresh approval domain, so a signature from one run cannot
+    // be replayed against the same step in the next.
+    #[test]
+    fn reset_starts_a_fresh_approval_domain() {
+        let st = state();
+        let mut s = st.borrow_mut();
+        let first = s.run_id.clone();
+        s.reset();
+        assert_ne!(s.run_id, first, "reset must mint a new run id");
+        let second = s.run_id.clone();
+        s.reset();
+        assert_ne!(s.run_id, second);
     }
 
     #[test]
