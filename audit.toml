@@ -42,12 +42,8 @@ ignore = [
     #   CVSS 8.8. HIGH-priority for agent-runtime: it is the WASM sandbox meant to
     #   contain a capsule. Bump wasmtime there per the advisory. core-live only.
     "RUSTSEC-2026-0269",
-    # RUSTSEC-2026-0188 — wasmtime-wasi hardlink/rename FilePerms bypass. core-live.
-    "RUSTSEC-2026-0188",
     # RUSTSEC-2026-0222 — wasmtime type indices mixed across engines. core-live.
     "RUSTSEC-2026-0222",
-    # RUSTSEC-2026-0182 — wasmtime-wasi fd_renumber leak. core-live.
-    "RUSTSEC-2026-0182",
     # RUSTSEC-2026-0258 — h2 unbounded empty DATA frames (DoS). core-live.
     "RUSTSEC-2026-0258",
     # RUSTSEC-2026-0220 — ruint Uint shift overflow flags/truncation. core-live.

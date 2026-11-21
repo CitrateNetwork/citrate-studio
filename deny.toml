@@ -95,9 +95,7 @@ ignore = [
     # citrate-agent-runtime (escalate the wasmtime bump there — 0269 is CVSS 8.8):
     "RUSTSEC-2025-0055", # tracing-subscriber ANSI/log injection (Low)
     "RUSTSEC-2026-0269", # wasmtime fs-sandbox escape (trailing slashes), CVSS 8.8
-    "RUSTSEC-2026-0188", # wasmtime-wasi hardlink/rename FilePerms bypass
     "RUSTSEC-2026-0222", # wasmtime type indices mixed across engines
-    "RUSTSEC-2026-0182", # wasmtime-wasi fd_renumber leak
     "RUSTSEC-2026-0258", # h2 unbounded empty DATA frames (DoS)
     "RUSTSEC-2026-0220", # ruint Uint shift overflow flags/truncation
 
